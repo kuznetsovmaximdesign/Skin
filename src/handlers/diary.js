@@ -1,4 +1,4 @@
-import { getEntriesByDate, getSkinHistory } from '../db/database.js';
+import { getFoodDiary, getSkinDiary, getSkinHistory, getDiarySummary } from '../db/database.js';
 
 export function setupDiaryHandler(bot) {
   // /diary command
@@ -22,21 +22,41 @@ export function setupDiaryHandler(bot) {
   bot.action(/^diary_(\d{4}-\d{2}-\d{2})$/, (ctx) => {
     const dateStr = ctx.match[1];
     const userId = ctx.from.id;
-    const entries = getEntriesByDate(userId, dateStr);
+    const food = getFoodDiary(userId, dateStr);
+    const skin = getSkinDiary(userId, dateStr);
 
-    if (entries.length === 0) {
+    if (food.length === 0 && skin.length === 0) {
       return ctx.answerCbQuery().then(() =>
         ctx.editMessageText(`📓 За ${dateStr} записей нет.\n\nОтправь фото чтобы добавить!`)
       );
     }
 
     let text = `📓 **Дневник за ${dateStr}:**\n\n`;
-    entries.forEach((entry, i) => {
-      const time = new Date(entry.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      const emoji = { food: '🍽', skin: '🔍', cosmetic: '🧴' }[entry.type] || '📝';
-      const summary = entry.analysis.substring(0, 120).replace(/\n/g, ' ');
-      text += `${i + 1}. ${emoji} ${time}\n${summary}...\n\n`;
-    });
+
+    if (food.length > 0) {
+      text += `🍽 **Еда (${food.length}):**\n`;
+      food.forEach((entry, i) => {
+        const time = new Date(entry.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const summary = entry.analysis.substring(0, 120).replace(/\n/g, ' ');
+        text += `${i + 1}. ${time} — ${summary}...\n`;
+      });
+      text += '\n';
+    }
+
+    if (skin.length > 0) {
+      text += `🔍 **Кожа (${skin.length}):**\n`;
+      skin.forEach((entry, i) => {
+        const time = new Date(entry.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const score = entry.score ? ` — ${entry.score}/10` : '';
+        text += `${i + 1}. ${time}${score}\n`;
+      });
+      text += '\n';
+    }
+
+    const summary = getDiarySummary(userId, dateStr);
+    if (summary.skinAvgScore) {
+      text += `📊 Средняя оценка кожи: ${summary.skinAvgScore.toFixed(1)}/10`;
+    }
 
     ctx.answerCbQuery();
     ctx.editMessageText(text, { parse_mode: 'Markdown' });
@@ -54,7 +74,7 @@ export function setupDiaryHandler(bot) {
     }
 
     let text = '📈 **Динамика кожи:**\n\n';
-    history.forEach((entry, i) => {
+    history.forEach((entry) => {
       const score = entry.score ? `${entry.score}/10` : '—';
       text += `${entry.date} — ${score}\n`;
     });
