@@ -274,3 +274,138 @@ ${contextBlock}
 
   return response.content[0].text;
 }
+
+// =============================================
+// ОТДЕЛЬНЫЕ ФУНКЦИИ АНАЛИЗА (для handlers)
+// =============================================
+
+/**
+ * Analyze food photo for acne diet compatibility
+ */
+export async function analyzeFood(base64, ctx = null, mediaType = 'image/jpeg') {
+  const contextBlock = ctx && isKristina(ctx)
+    ? `ПОЛЬЗОВАТЕЛЬ: Кристина\n${getKristinaContext()}`
+    : ctx?.session?.profile
+      ? `ПРОФИЛЬ:\n${JSON.stringify(ctx.session.profile)}`
+      : `Давай общие рекомендации по диете при акне.`;
+
+  const system = `Ты — ИИ-нутрициолог, специалист по питанию при акне.
+
+${contextBlock}
+
+Проанализируй фото еды и ответь:
+🍽 **Что на фото:** (перечисли продукты)
+✅ **Можно:** (что безопасно для кожи и почему)
+🔴 **Нельзя:** (что может ухудшить состояние кожи и почему)
+📊 **Оценка:** X/10 (10 = идеально для кожи)
+💡 **Совет:** (чем заменить вредное)
+
+Отвечай на русском, дружелюбно и по делу.`;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1500,
+    system,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: 'Проанализируй эту еду.' },
+      ],
+    }],
+  });
+
+  return response.content[0].text;
+}
+
+/**
+ * Analyze skin photo — condition assessment + dynamics
+ */
+export async function analyzeSkin(base64, skinHistory = [], ctx = null, mediaType = 'image/jpeg') {
+  const contextBlock = ctx && isKristina(ctx)
+    ? `ПОЛЬЗОВАТЕЛЬ: Кристина\n${getKristinaContext()}`
+    : `Дай общую оценку состояния кожи.`;
+
+  let historyBlock = '';
+  if (skinHistory.length > 0) {
+    historyBlock = `\nПредыдущие оценки кожи:\n` +
+      skinHistory.map(h => `- ${h.date}: ${h.score}/10`).join('\n');
+  }
+
+  const system = `Ты — ИИ-дерматолог, специалист по оценке состояния кожи.
+
+${contextBlock}
+${historyBlock}
+
+Проанализируй фото кожи и ответь:
+🔍 **Состояние:** (что видно — воспаления, пустулы, пятна, текстура)
+📊 **Оценка:** X/10 (10 = абсолютно чистая кожа)
+${skinHistory.length > 0 ? '📈 **Динамика:** (сравни с предыдущими оценками)\n' : ''}💊 **Рекомендации:** (что делать дальше)
+
+ВАЖНО: Оценка обязательна в формате "Оценка: X/10".
+Отвечай на русском, дружелюбно и по делу.`;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1500,
+    system,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: 'Оцени состояние кожи.' },
+      ],
+    }],
+  });
+
+  const text = response.content[0].text;
+  const scoreMatch = text.match(/Оценка[^:]*:\s*(\d+)/);
+  const score = scoreMatch ? parseInt(scoreMatch[1]) : null;
+
+  return { text, score };
+}
+
+/**
+ * Analyze cosmetic product — INCI safety check
+ */
+export async function analyzeCosmetic(base64, ctx = null, mediaType = 'image/jpeg') {
+  const contextBlock = ctx && isKristina(ctx)
+    ? `ПОЛЬЗОВАТЕЛЬ: Кристина\n${getKristinaContext()}`
+    : `Проверь INCI состав на безопасность для кожи, склонной к акне.`;
+
+  const system = `Ты — ИИ-косметолог, эксперт по INCI-анализу.
+
+${contextBlock}
+
+Проанализируй фото косметического продукта и ответь:
+🏷 **Продукт:** (название если видно)
+📋 **Состав:** (ингредиенты из INCI)
+🔴 **Опасные ингредиенты:** (комедогенные, проблемные — с пояснением)
+✅ **Безопасные ингредиенты:** (хорошие для кожи)
+📊 **Вердикт: ✅ МОЖНО / ❌ НЕЛЬЗЯ**
+💡 **Альтернатива:** (если нельзя — предложи безопасный аналог)
+
+ВАЖНО: При наличии хотя бы одного стоп-ингредиента — однозначное ❌ НЕЛЬЗЯ.
+Отвечай на русском, дружелюбно и по делу.`;
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1500,
+    system,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: 'Проанализируй состав этого средства.' },
+      ],
+    }],
+  });
+
+  const text = response.content[0].text;
+  const verdictMatch = text.match(/(?:МОЖНО|НЕЛЬЗЯ)/);
+  const safetyScore = verdictMatch ? (verdictMatch[0] === 'МОЖНО' ? 10 : 0) : null;
+  const nameMatch = text.match(/Продукт:\s*\*?\*?(.+?)(?:\*?\*?\n|$)/);
+  const productName = nameMatch ? nameMatch[1].trim() : null;
+
+  return { text, safetyScore, productName };
+}

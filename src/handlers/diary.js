@@ -63,7 +63,8 @@ async function showDayDiary(ctx, date) {
   if (skinEntries.length > 0) {
     msg += `🔍 **Кожа** (${skinEntries.length} записей):\n`;
     skinEntries.forEach((entry, i) => {
-      msg += `${i + 1}. Оценка: ${entry.score || '—'}/10 (${entry.created_at})\n`;
+      const time = new Date(entry.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      msg += `${i + 1}. Оценка: ${entry.score || '—'}/10 (${time})\n`;
     });
     if (summary.skinAvgScore) {
       msg += `\n📊 Средняя оценка за день: ${summary.skinAvgScore.toFixed(1)}/10`;

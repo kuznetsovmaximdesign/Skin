@@ -141,6 +141,14 @@ bot.hears('📓 Дневник', (ctx) => {
 
 setupDiaryHandler(bot);
 
+// /skip — during profile onboarding
+bot.command('skip', (ctx) => {
+  if (ctx.session.profileStep) {
+    return handleProfileStep(ctx, '/skip');
+  }
+  ctx.reply('Нечего пропускать. Используй /profile чтобы начать заполнение профиля.');
+});
+
 // PHOTO — single API call: classify + analyze
 bot.on('photo', async (ctx) => {
   const photos = ctx.message.photo;
