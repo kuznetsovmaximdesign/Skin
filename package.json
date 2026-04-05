@@ -1,6 +1,7 @@
 {
   "name": "acne-skin-bot",
   "version": "1.0.0",
+  "type": "module",
   "description": "Telegram bot for skin care analysis — food, skin, cosmetics (INCI) with diary",
   "main": "src/bot.js",
   "scripts": {

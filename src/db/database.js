@@ -1,6 +1,8 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'diary.json');
 
@@ -9,7 +11,7 @@ function ensureDataDir() {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
   if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ entries: [], profiles: {} }, null, 2));
+    fs.writeFileSync(DB_FILE, JSON.stringify({ food: [], skin: [], cosmetic: [] }, null, 2));
   }
 }
 
@@ -24,56 +26,76 @@ function writeDB(data) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-function addEntry(userId, type, analysis, photoFileId = null) {
+export function addFoodEntry(userId, photoId, analysis) {
   const db = readDB();
-  const entry = {
-    id: Date.now(),
+  db.food.push({
     userId,
-    type, // 'food' | 'skin' | 'cosmetic'
+    photoId,
     analysis,
-    photoFileId,
-    date: new Date().toISOString(),
-  };
-  db.entries.push(entry);
-  writeDB(db);
-  return entry;
-}
-
-function getEntries(userId, type = null, limit = 10) {
-  const db = readDB();
-  let entries = db.entries.filter((e) => e.userId === userId);
-  if (type) entries = entries.filter((e) => e.type === type);
-  return entries.slice(-limit);
-}
-
-function getEntriesByDate(userId, dateStr) {
-  const db = readDB();
-  return db.entries.filter((e) => {
-    return e.userId === userId && e.date.startsWith(dateStr);
+    date: new Date().toISOString().split('T')[0],
+    createdAt: new Date().toISOString(),
   });
-}
-
-function getSkinHistory(userId, limit = 5) {
-  return getEntries(userId, 'skin', limit);
-}
-
-function getProfile(userId) {
-  const db = readDB();
-  return db.profiles?.[userId] || null;
-}
-
-function saveProfile(userId, profile) {
-  const db = readDB();
-  if (!db.profiles) db.profiles = {};
-  db.profiles[userId] = { ...profile, updatedAt: new Date().toISOString() };
   writeDB(db);
 }
 
-module.exports = {
-  addEntry,
-  getEntries,
-  getEntriesByDate,
-  getSkinHistory,
-  getProfile,
-  saveProfile,
-};
+export function addSkinEntry(userId, photoId, analysis, score = null) {
+  const db = readDB();
+  db.skin.push({
+    userId,
+    photoId,
+    analysis,
+    score,
+    date: new Date().toISOString().split('T')[0],
+    createdAt: new Date().toISOString(),
+  });
+  writeDB(db);
+}
+
+export function addCosmeticEntry(userId, photoId, productName, analysis, safetyScore = null) {
+  const db = readDB();
+  db.cosmetic.push({
+    userId,
+    photoId,
+    productName,
+    analysis,
+    safetyScore,
+    date: new Date().toISOString().split('T')[0],
+    createdAt: new Date().toISOString(),
+  });
+  writeDB(db);
+}
+
+export function getSkinHistory(userId, limit = 5) {
+  const db = readDB();
+  return db.skin
+    .filter((e) => e.userId === userId)
+    .slice(-limit);
+}
+
+export function getEntriesByDate(userId, dateStr) {
+  const db = readDB();
+  const results = [];
+  for (const type of ['food', 'skin', 'cosmetic']) {
+    for (const entry of db[type]) {
+      if (entry.userId === userId && entry.date === dateStr) {
+        results.push({ ...entry, type });
+      }
+    }
+  }
+  return results.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+export function getAllEntries(userId, limit = 20) {
+  const db = readDB();
+  const results = [];
+  for (const type of ['food', 'skin', 'cosmetic']) {
+    for (const entry of db[type]) {
+      if (entry.userId === userId) {
+        results.push({ ...entry, type });
+      }
+    }
+  }
+  return results
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .slice(-limit);
+}
