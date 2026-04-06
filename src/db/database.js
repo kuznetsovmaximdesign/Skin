@@ -66,3 +66,78 @@ export function getDiarySummary(userId, date) {
   const skinAvgScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   return { food: food.length, skin: skin.length, skinAvgScore };
 }
+
+// =============================================
+// ADMIN PANEL FUNCTIONS
+// =============================================
+
+export function getAllData() {
+  return load();
+}
+
+export function getStats() {
+  const data = load();
+  const uniqueUsers = new Set([
+    ...data.food.map(e => e.userId),
+    ...data.skin.map(e => e.userId),
+    ...data.cosmetic.map(e => e.userId),
+  ]);
+
+  const skinScores = data.skin.map(e => e.score).filter(Boolean);
+  const avgSkinScore = skinScores.length
+    ? (skinScores.reduce((a, b) => a + b, 0) / skinScores.length).toFixed(1)
+    : null;
+
+  const dates = [
+    ...data.food.map(e => e.date),
+    ...data.skin.map(e => e.date),
+    ...data.cosmetic.map(e => e.date),
+  ].sort();
+
+  return {
+    totalFood: data.food.length,
+    totalSkin: data.skin.length,
+    totalCosmetic: data.cosmetic.length,
+    totalEntries: data.food.length + data.skin.length + data.cosmetic.length,
+    uniqueUsers: uniqueUsers.size,
+    avgSkinScore,
+    firstDate: dates[0] || null,
+    lastDate: dates[dates.length - 1] || null,
+  };
+}
+
+export function getEntriesByType(type, limit = 50, offset = 0) {
+  const data = load();
+  const entries = (data[type] || [])
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+    .slice(offset, offset + limit);
+  return { entries, total: (data[type] || []).length };
+}
+
+export function deleteEntry(type, index) {
+  const data = load();
+  if (!data[type]) return false;
+  const sorted = data[type].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  if (index < 0 || index >= sorted.length) return false;
+  const entry = sorted[index];
+  data[type] = data[type].filter(e => e !== entry);
+  save(data);
+  return true;
+}
+
+export function getUsersList() {
+  const data = load();
+  const users = {};
+  for (const type of ['food', 'skin', 'cosmetic']) {
+    for (const entry of data[type]) {
+      if (!users[entry.userId]) {
+        users[entry.userId] = { userId: entry.userId, food: 0, skin: 0, cosmetic: 0, lastActive: null };
+      }
+      users[entry.userId][type]++;
+      if (!users[entry.userId].lastActive || entry.createdAt > users[entry.userId].lastActive) {
+        users[entry.userId].lastActive = entry.createdAt;
+      }
+    }
+  }
+  return Object.values(users).sort((a, b) => (b.lastActive || '').localeCompare(a.lastActive || ''));
+}

@@ -6,11 +6,14 @@
   "main": "src/bot.js",
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "node --watch src/bot.js"
+    "dev": "node --watch src/bot.js",
+    "admin": "node src/admin/server.js",
+    "admin:dev": "node --watch src/admin/server.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "telegraf": "^4.16.3",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "telegraf": "^4.16.3"
   }
 }
