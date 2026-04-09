@@ -1,16 +1,23 @@
 {
-  "name": "acne-skin-bot",
+  "name": "aurora-tracker",
+  "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Telegram bot for skin care analysis — food, skin, cosmetics (INCI) with diary",
-  "main": "src/bot.js",
+  "description": "Aurora Content Tracker — plan, track, and manage content ideas",
   "scripts": {
-    "start": "node src/bot.js",
-    "dev": "node --watch src/bot.js"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "telegraf": "^4.16.3",
-    "dotenv": "^16.4.7"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.7"
   }
 }
