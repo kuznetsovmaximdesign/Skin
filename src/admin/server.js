@@ -3,6 +3,7 @@ import express from 'express';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getStats, getEntriesByType, deleteEntry, getUsersList, getAllData } from '../db/database.js';
+import { getTasks, addTask, updateTask, deleteTask, getTasksProgress, cleanDoneTasks, getTaskDates } from '../db/tasks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -44,6 +45,48 @@ app.get('/api/export', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', 'attachment; filename=skin-bot-data.json');
   res.json(data);
+});
+
+// =============================================
+// TASKS API
+// =============================================
+
+app.get('/api/tasks', (req, res) => {
+  const { status, priority, date } = req.query;
+  res.json(getTasks({ status, priority, date }));
+});
+
+app.get('/api/tasks/progress', (req, res) => {
+  res.json(getTasksProgress(req.query.date));
+});
+
+app.get('/api/tasks/dates', (req, res) => {
+  res.json(getTaskDates());
+});
+
+app.post('/api/tasks', (req, res) => {
+  const { text, priority, deadline, category } = req.body;
+  if (!text) return res.status(400).json({ error: 'Text is required' });
+  const task = addTask({ text, priority, deadline, category });
+  res.json(task);
+});
+
+app.patch('/api/tasks/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  const task = updateTask(id, req.body);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(task);
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  const success = deleteTask(id);
+  res.json({ success });
+});
+
+app.post('/api/tasks/clean', (req, res) => {
+  const removed = cleanDoneTasks();
+  res.json({ removed });
 });
 
 // Serve admin panel

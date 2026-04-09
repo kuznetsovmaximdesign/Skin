@@ -546,6 +546,365 @@
       transform: translateY(0);
       opacity: 1;
     }
+
+    /* =============================================
+       TASKS PAGE
+       ============================================= */
+
+    /* Progress bar */
+    .progress-bar-wrap {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .progress-header h3 { font-size: 15px; font-weight: 600; }
+
+    .progress-percent {
+      font-size: 28px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--aurora-1), var(--aurora-2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      background: var(--bg-primary);
+      border-radius: 5px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--aurora-1), var(--aurora-2));
+      border-radius: 5px;
+      transition: width 0.5s ease;
+    }
+
+    .progress-stats {
+      display: flex;
+      gap: 24px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .progress-stats span { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-done { background: var(--success); }
+    .dot-progress { background: var(--aurora-1); }
+    .dot-todo { background: var(--text-muted); }
+
+    /* Add task form */
+    .add-task-form {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group.grow { flex: 1; min-width: 200px; }
+
+    .form-group label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .form-input {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus { border-color: var(--accent); }
+
+    .form-input::placeholder { color: var(--text-muted); }
+
+    .form-select {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+    }
+
+    .form-select:focus { border-color: var(--accent); }
+
+    .add-task-btn {
+      background: linear-gradient(135deg, var(--aurora-1), var(--aurora-2));
+      border: none;
+      border-radius: 10px;
+      padding: 10px 20px;
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .add-task-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+
+    /* Task columns (Kanban) */
+    .tasks-columns {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    @media (max-width: 1100px) {
+      .tasks-columns { grid-template-columns: 1fr; }
+    }
+
+    .task-column {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      min-height: 200px;
+    }
+
+    .column-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .column-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .column-count {
+      background: var(--bg-card);
+      border-radius: 8px;
+      padding: 2px 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .column-header.col-todo { border-top: 3px solid var(--text-muted); }
+    .column-header.col-progress { border-top: 3px solid var(--aurora-1); }
+    .column-header.col-done { border-top: 3px solid var(--success); }
+
+    .column-body {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Task card */
+    .task-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      transition: all 0.2s;
+      cursor: default;
+    }
+
+    .task-card:hover {
+      border-color: rgba(123, 104, 238, 0.4);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+
+    .task-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .task-text {
+      font-size: 14px;
+      line-height: 1.4;
+      flex: 1;
+    }
+
+    .task-card-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .priority-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .priority-critical { background: #ff4444; box-shadow: 0 0 8px rgba(255, 68, 68, 0.5); }
+    .priority-high { background: var(--danger); }
+    .priority-normal { background: var(--aurora-1); }
+    .priority-low { background: var(--text-muted); }
+
+    .priority-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+
+    .priority-label.critical { color: #ff4444; }
+    .priority-label.high { color: var(--danger); }
+    .priority-label.normal { color: var(--aurora-1); }
+    .priority-label.low { color: var(--text-muted); }
+
+    .task-date {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .task-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .task-action-btn {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+
+    .task-action-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border);
+      color: var(--text-primary);
+    }
+
+    .task-action-btn.btn-done:hover {
+      background: rgba(0, 212, 170, 0.15);
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .task-action-btn.btn-start:hover {
+      background: rgba(123, 104, 238, 0.15);
+      border-color: var(--aurora-1);
+      color: var(--aurora-1);
+    }
+
+    .task-action-btn.btn-delete:hover {
+      background: rgba(255, 107, 157, 0.1);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .task-deadline {
+      font-size: 11px;
+      color: var(--warning);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Clean button */
+    .clean-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      color: var(--text-muted);
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+
+    .clean-btn:hover {
+      background: rgba(255, 107, 157, 0.1);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .tasks-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .tasks-toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .column-empty {
+      text-align: center;
+      padding: 24px 16px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Nav separator */
+    .nav-separator {
+      height: 1px;
+      background: var(--border);
+      margin: 8px 16px;
+    }
   </style>
 </head>
 <body>
@@ -565,6 +924,11 @@
         <div class="nav-item active" data-page="dashboard">
           <span class="icon">&#9632;</span> Dashboard
         </div>
+        <div class="nav-item" data-page="tasks">
+          <span class="icon">&#9745;</span> Tasks
+          <span class="badge" id="badge-tasks" style="background: linear-gradient(135deg, var(--aurora-1), var(--aurora-2))">0</span>
+        </div>
+        <div class="nav-separator"></div>
         <div class="nav-item" data-page="skin">
           <span class="icon">&#128270;</span> Skin
           <span class="badge" id="badge-skin">0</span>
@@ -623,17 +987,23 @@
     }
 
     async function loadStats() {
-      const res = await fetch('/api/stats');
-      stats = await res.json();
+      const [statsRes, tasksRes] = await Promise.all([
+        fetch('/api/stats'),
+        fetch('/api/tasks/progress'),
+      ]);
+      stats = await statsRes.json();
+      const taskProgress = await tasksRes.json();
       document.getElementById('badge-skin').textContent = stats.totalSkin;
       document.getElementById('badge-food').textContent = stats.totalFood;
       document.getElementById('badge-cosmetic').textContent = stats.totalCosmetic;
       document.getElementById('badge-users').textContent = stats.uniqueUsers;
+      document.getElementById('badge-tasks').textContent = taskProgress.todo + taskProgress.inProgress;
     }
 
     function renderPage(page) {
       switch (page) {
         case 'dashboard': renderDashboard(); break;
+        case 'tasks': renderTasks(); break;
         case 'skin': renderEntries('skin'); break;
         case 'food': renderEntries('food'); break;
         case 'cosmetic': renderEntries('cosmetic'); break;
@@ -854,6 +1224,224 @@
           </div>
         `).join('')}
       `;
+    }
+
+    // =============================================
+    // TASKS
+    // =============================================
+
+    async function renderTasks() {
+      const main = document.getElementById('main');
+      main.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      const [tasksRes, progressRes] = await Promise.all([
+        fetch('/api/tasks'),
+        fetch('/api/tasks/progress'),
+      ]);
+      const tasks = await tasksRes.json();
+      const progress = await progressRes.json();
+
+      const todoTasks = tasks.filter(t => t.status === 'todo');
+      const inProgressTasks = tasks.filter(t => t.status === 'in_progress');
+      const doneTasks = tasks.filter(t => t.status === 'done');
+
+      // Update badge
+      const activeTasks = todoTasks.length + inProgressTasks.length;
+      document.getElementById('badge-tasks').textContent = activeTasks;
+
+      const todayStr = new Date().toLocaleDateString('ru-RU', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+      });
+
+      main.innerHTML = `
+        <div class="page-header">
+          <h2>Aurora Tasks</h2>
+          <p>${todayStr}</p>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-bar-wrap">
+          <div class="progress-header">
+            <h3>Progress today</h3>
+            <span class="progress-percent">${progress.percent}%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" style="width: ${progress.percent}%"></div>
+          </div>
+          <div class="progress-stats">
+            <span><span class="dot dot-done"></span> Done: ${progress.done}</span>
+            <span><span class="dot dot-progress"></span> In progress: ${progress.inProgress}</span>
+            <span><span class="dot dot-todo"></span> Todo: ${progress.todo}</span>
+            <span>Total: ${progress.total}</span>
+          </div>
+        </div>
+
+        <!-- Add task form -->
+        <form class="add-task-form" onsubmit="handleAddTask(event)">
+          <div class="form-group grow">
+            <label>Task</label>
+            <input type="text" class="form-input" id="taskText" placeholder="What needs to be done?" required>
+          </div>
+          <div class="form-group">
+            <label>Priority</label>
+            <select class="form-select" id="taskPriority">
+              <option value="normal">Normal</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Category</label>
+            <input type="text" class="form-input" id="taskCategory" placeholder="e.g. Content" style="width: 120px">
+          </div>
+          <div class="form-group">
+            <label>Deadline</label>
+            <input type="date" class="form-input" id="taskDeadline">
+          </div>
+          <button type="submit" class="add-task-btn">+ Add</button>
+        </form>
+
+        <!-- Toolbar -->
+        <div class="tasks-toolbar">
+          <div class="tasks-toolbar-left">
+            <span style="font-size: 13px; color: var(--text-muted)">${tasks.length} tasks total</span>
+          </div>
+          ${doneTasks.length > 0 ? '<button class="clean-btn" onclick="handleCleanTasks()">Clear done (' + doneTasks.length + ')</button>' : ''}
+        </div>
+
+        <!-- Kanban columns -->
+        <div class="tasks-columns">
+          <!-- TODO -->
+          <div class="task-column">
+            <div class="column-header col-todo">
+              <h3>Todo <span class="column-count">${todoTasks.length}</span></h3>
+            </div>
+            <div class="column-body">
+              ${todoTasks.length === 0 ? '<div class="column-empty">No pending tasks</div>' :
+                todoTasks.map(t => renderTaskCard(t)).join('')}
+            </div>
+          </div>
+
+          <!-- IN PROGRESS -->
+          <div class="task-column">
+            <div class="column-header col-progress">
+              <h3>In Progress <span class="column-count">${inProgressTasks.length}</span></h3>
+            </div>
+            <div class="column-body">
+              ${inProgressTasks.length === 0 ? '<div class="column-empty">Nothing in progress</div>' :
+                inProgressTasks.map(t => renderTaskCard(t)).join('')}
+            </div>
+          </div>
+
+          <!-- DONE -->
+          <div class="task-column">
+            <div class="column-header col-done">
+              <h3>Done <span class="column-count">${doneTasks.length}</span></h3>
+            </div>
+            <div class="column-body">
+              ${doneTasks.length === 0 ? '<div class="column-empty">Nothing completed yet</div>' :
+                doneTasks.map(t => renderTaskCard(t)).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderTaskCard(task) {
+      const priorityLabels = { critical: 'Critical', high: 'High', normal: 'Normal', low: 'Low' };
+      const isDone = task.status === 'done';
+      const textStyle = isDone ? 'text-decoration: line-through; opacity: 0.6;' : '';
+
+      let actions = '';
+      if (task.status === 'todo') {
+        actions = `
+          <button class="task-action-btn btn-start" onclick="handleTaskStatus(${task.id}, 'in_progress')" title="Start">&#9654;</button>
+          <button class="task-action-btn btn-done" onclick="handleTaskStatus(${task.id}, 'done')" title="Done">&#10003;</button>
+          <button class="task-action-btn btn-delete" onclick="handleDeleteTask(${task.id})" title="Delete">&#10005;</button>
+        `;
+      } else if (task.status === 'in_progress') {
+        actions = `
+          <button class="task-action-btn btn-done" onclick="handleTaskStatus(${task.id}, 'done')" title="Done">&#10003;</button>
+          <button class="task-action-btn" onclick="handleTaskStatus(${task.id}, 'todo')" title="Back to Todo">&#8634;</button>
+          <button class="task-action-btn btn-delete" onclick="handleDeleteTask(${task.id})" title="Delete">&#10005;</button>
+        `;
+      } else {
+        actions = `
+          <button class="task-action-btn" onclick="handleTaskStatus(${task.id}, 'todo')" title="Reopen">&#8634;</button>
+          <button class="task-action-btn btn-delete" onclick="handleDeleteTask(${task.id})" title="Delete">&#10005;</button>
+        `;
+      }
+
+      const deadlineHTML = task.deadline
+        ? `<span class="task-deadline">&#128197; ${task.deadline}</span>`
+        : '';
+
+      const categoryHTML = task.category
+        ? `<span class="score-badge score-mid" style="font-size: 11px; padding: 2px 8px;">${escapeHtml(task.category)}</span>`
+        : '';
+
+      return `
+        <div class="task-card">
+          <div class="task-card-top">
+            <div class="task-text" style="${textStyle}">${escapeHtml(task.text)}</div>
+          </div>
+          <div class="task-card-bottom">
+            <div class="task-meta">
+              <span class="priority-dot priority-${task.priority}"></span>
+              <span class="priority-label ${task.priority}">${priorityLabels[task.priority] || 'Normal'}</span>
+              ${categoryHTML}
+              ${deadlineHTML}
+            </div>
+            <div class="task-actions">${actions}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function handleAddTask(e) {
+      e.preventDefault();
+      const text = document.getElementById('taskText').value.trim();
+      const priority = document.getElementById('taskPriority').value;
+      const category = document.getElementById('taskCategory').value.trim();
+      const deadline = document.getElementById('taskDeadline').value || null;
+
+      if (!text) return;
+
+      await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, priority, category, deadline }),
+      });
+
+      showToast('Task added');
+      renderTasks();
+    }
+
+    async function handleTaskStatus(id, status) {
+      await fetch(`/api/tasks/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      const label = status === 'done' ? 'Task completed!' : status === 'in_progress' ? 'Started' : 'Reopened';
+      showToast(label);
+      renderTasks();
+    }
+
+    async function handleDeleteTask(id) {
+      if (!confirm('Delete this task?')) return;
+      await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+      showToast('Task deleted');
+      renderTasks();
+    }
+
+    async function handleCleanTasks() {
+      if (!confirm('Remove all completed tasks?')) return;
+      const res = await fetch('/api/tasks/clean', { method: 'POST' });
+      const { removed } = await res.json();
+      showToast(`Cleared ${removed} tasks`);
+      renderTasks();
     }
 
     // Helpers
