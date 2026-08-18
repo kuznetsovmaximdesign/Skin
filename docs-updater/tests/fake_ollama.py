@@ -1,0 +1,101 @@
+"""Игрушечный Ollama для тестов: отвечает как настоящий, но без моделей и без сети наружу.
+
+Эмбеддинги — детерминированный «мешок слов», так что похожие тексты дают похожие векторы.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DIMENSIONS = 96
+
+
+def embed_text(text: str) -> list[float]:
+    vector = [0.0] * DIMENSIONS
+    for word in re.findall(r"\w+", text.lower()):
+        vector[zlib.crc32(word.encode("utf-8")) % DIMENSIONS] += 1.0
+    return vector
+
+
+class FakeOllama:
+    """Управляемый сервер: можно менять список моделей и ответ генерации."""
+
+    def __init__(self, models: list[str] | None = None) -> None:
+        self.models = models if models is not None else ["qwen3:latest", "bge-m3:latest"]
+        self.generate_response: str | None = None
+        self.requests: list[dict] = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.server = server
+        self.port = server.server_address[1]
+        self.host = f"http://127.0.0.1:{self.port}"
+        self.thread = threading.Thread(target=server.serve_forever, daemon=True)
+
+    def start(self) -> "FakeOllama":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+    def _handler(self):
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:  # тишина в выводе тестов
+                pass
+
+            def _send(self, code: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _known(self, model: str) -> bool:
+                base = model.split(":")[0]
+                return any(name == model or name.split(":")[0] == base for name in outer.models)
+
+            def do_GET(self) -> None:
+                if self.path == "/api/tags":
+                    self._send(200, {"models": [{"name": name} for name in outer.models]})
+                else:
+                    self._send(404, {"error": "not found"})
+
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                outer.requests.append({"path": self.path, "payload": payload})
+                model = payload.get("model", "")
+
+                if not self._known(model):
+                    self._send(404, {"error": f"model '{model}' not found"})
+                    return
+
+                if self.path == "/api/embed":
+                    texts = payload.get("input") or []
+                    if isinstance(texts, str):
+                        texts = [texts]
+                    self._send(200, {"embeddings": [embed_text(text) for text in texts]})
+                elif self.path == "/api/embeddings":
+                    self._send(200, {"embedding": embed_text(payload.get("prompt", ""))})
+                elif self.path == "/api/generate":
+                    self._send(200, {"response": outer.render(payload.get("prompt", ""))})
+                else:
+                    self._send(404, {"error": "not found"})
+
+        return Handler
+
+    def render(self, prompt: str) -> str:
+        """По умолчанию возвращает исходный документ из промпта с одной правкой."""
+        if self.generate_response is not None:
+            return self.generate_response
+        match = re.search(r"# ИСХОДНЫЙ ДОКУМЕНТ.*?\n\n(.*?)\n\n# ЧТО ИЗМЕНИЛОСЬ", prompt, re.DOTALL)
+        document = match.group(1) if match else "# Пустой документ"
+        updated = document.replace("Токен действует 60 минут.", "Токен действует 120 минут.")
+        return f"<think>рассуждения модели</think>\n{updated}\n"
