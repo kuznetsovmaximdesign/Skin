@@ -250,9 +250,33 @@ def test_full_flow_in_browser(live_server):
         assert "Замечания по гайду" in page.inner_text("#review-notes")
         assert page.eval_on_selector_all("#review-notes li", "els => els.length") == 2
 
+        # правки по разделам: обоснование, поштучное принятие, сборка
+        live_server["ollama"].generate_response = (
+            "## Срок жизни токена\n\nТокен действует 120 минут.\n\n"
+            "ОБОСНОВАНИЕ: срок жизни токена увеличен до 120 минут\nПРЕДПОЛОЖЕНИЕ: нет"
+        )
+        page.fill("#change-text", "Срок жизни токена увеличен до 120 минут")
+        page.select_option("#section-select", label="— Срок жизни токена")
+        page.click("#propose")
+        page.wait_for_selector(".edit", timeout=120000)
+        assert "Основание" in page.inner_text(".edit__reason")
+        assert "уверенность" in page.inner_text(".edit__head")
+
+        page.click(".edit [data-accept]")
+        page.wait_for_selector(".edit--accepted", timeout=30000)
+
+        previous_file = page.inner_text("#result-file")
+        page.click("#build-changeset")
+        page.wait_for_function(
+            "(previous) => document.querySelector('#result-file').textContent !== previous",
+            arg=previous_file,
+            timeout=60000,
+        )
+        assert "120 минут" in page.input_value("#result-view")
+
         # сохранённые результаты видны на странице (список обновляется после генерации)
         page.wait_for_function(
-            "() => document.querySelectorAll('.result-row').length >= 3", timeout=30000
+            "() => document.querySelectorAll('.result-row').length >= 4", timeout=30000
         )
         rows = page.inner_text("#results-list")
         assert "api-auth.md" in rows

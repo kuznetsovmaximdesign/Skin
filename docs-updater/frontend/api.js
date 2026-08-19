@@ -2,8 +2,16 @@
    Вёрстка и интерфейс (app.js) не знают ни одного URL — так фронтенд легко переделать. */
 
 const Api = (() => {
+  // Выбранный продукт подставляется во все запросы: контексты изолированы.
+  let currentProduct = '';
+
+  function withProduct(path) {
+    if (!currentProduct) return path;
+    return path + (path.includes('?') ? '&' : '?') + 'product=' + encodeURIComponent(currentProduct);
+  }
+
   async function request(path, options = {}) {
-    const response = await fetch(path, options);
+    const response = await fetch(withProduct(path), options);
     let data = null;
     try { data = await response.json(); } catch (e) { data = null; }
     if (!response.ok) {
@@ -28,6 +36,10 @@ const Api = (() => {
   });
 
   return {
+    setProduct: (value) => { currentProduct = value || ''; },
+    getProduct: () => currentProduct,
+
+    products: () => fetch('/api/products').then((response) => response.json()),
     status: () => request('/api/status'),
     saveConfig: (patch) => post('/api/config', patch),
 
@@ -62,9 +74,20 @@ const Api = (() => {
     forgetFormat: () => request('/api/format', { method: 'DELETE' }),
 
     reindex: () => post('/api/reindex'),
+    buildMap: () => post('/api/map/build'),
+    map: () => request('/api/map'),
+    drift: (changeDescription, docPath) =>
+      post('/api/drift', { change_description: changeDescription || '', doc_path: docPath || '' }),
+    impact: (changeDescription) => post('/api/impact', { change_description: changeDescription }),
     search: (query) => post('/api/search', { query }),
 
     generate: (body) => post('/api/generate', body),
+
+    proposeChangeset: (body) => post('/api/changeset/propose', body),
+    decideEdit: (changesetId, editId, accepted, comment) =>
+      post(`/api/changeset/${changesetId}/decide`, { edit_id: editId, accepted, comment: comment || '' }),
+    buildChangeset: (changesetId) => post(`/api/changeset/${changesetId}/build`),
+    feedback: (docPath) => request('/api/feedback?doc_path=' + encodeURIComponent(docPath || '')),
 
     /* Потоковая генерация: onEvent получает события start / chunk / done.
        Возвращает false, если браузер не умеет читать поток — тогда вызывающий

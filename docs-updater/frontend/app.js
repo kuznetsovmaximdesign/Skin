@@ -235,12 +235,115 @@ $('forget-format').addEventListener('click', async () => {
   } catch (error) { showError(error); }
 });
 
+
+/* ---------- продукты, карта, drift, затронутые статьи ---------- */
+
+async function loadProducts() {
+  const data = await Api.products();
+  const select = $('product-select');
+  select.innerHTML = data.products
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
+    .join('');
+  const chosen = data.products.length ? (data.default || data.products[0].id) : '';
+  select.value = chosen;
+  Api.setProduct(chosen);
+  select.disabled = data.products.length < 2;
+}
+
+async function reloadEverything() {
+  await loadStatus();
+  await loadDocuments();
+  await loadGuide();
+  await loadStyleSources();
+  await loadSamples();
+  await loadResults();
+}
+
+$('product-select').addEventListener('change', async (event) => {
+  Api.setProduct(event.target.value);
+  state.doc = null;
+  state.result = null;
+  $('candidates').innerHTML = '';
+  $('impact-list').hidden = true;
+  $('drift-list').hidden = true;
+  $('step-diff').hidden = true;
+  $('chosen-doc').textContent = 'Документ не выбран';
+  $('generate').disabled = true;
+  $('propose').disabled = true;
+  busy('Переключаем продукт…');
+  try {
+    await reloadEverything();
+    toast(`Продукт: ${event.target.selectedOptions[0].textContent}`);
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('build-map').addEventListener('click', async () => {
+  busy('Считаем, что документирует каждый документ…');
+  try {
+    const data = await Api.buildMap();
+    await loadStatus();
+    toast(data.built
+      ? `Карта готова: описано документов — ${data.built}`
+      : 'Все документы уже описаны, пересчитывать нечего');
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+function renderImpact(data) {
+  const box = $('impact-list');
+  box.hidden = false;
+  if (!data.documents.length) {
+    box.innerHTML = '<p class="muted">Затронутых статей не нашлось.</p>';
+    return;
+  }
+  box.innerHTML = data.documents.map((item) => `
+    <div class="impact__row">
+      <div class="impact__title">${escapeHtml(item.title)} <span class="mono">${escapeHtml(item.path)}</span></div>
+      <div><span class="tag tag--${escapeHtml(item.action)}">${escapeHtml(item.action)}</span>
+        <b>${item.relevance}%</b></div>
+      <div class="impact__reason">${escapeHtml(item.reason || item.summary || '')}</div>
+    </div>`).join('');
+}
+
+$('find-impact').addEventListener('click', async () => {
+  const query = $('change-text').value.trim();
+  if (!query) { toast('Опишите, что изменилось', true); return; }
+  busy('Ищем все статьи, которых касается изменение…');
+  try {
+    renderImpact(await Api.impact(query));
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+function renderDrift(data) {
+  const box = $('drift-list');
+  box.hidden = false;
+  if (!data.findings.length) {
+    box.innerHTML = '<p class="muted">Расхождений не найдено.</p>';
+    return;
+  }
+  const shown = data.findings.slice(0, 40);
+  box.innerHTML = `<div class="review__title">На что ещё посмотреть: ${data.summary.total}</div>` +
+    shown.map((item) => `
+      <div class="drift__row">
+        <div>${escapeHtml(item.message)}</div>
+        <div><span class="tag tag--${escapeHtml(item.severity)}">${escapeHtml(item.kind)}</span></div>
+        <div class="drift__where mono">${escapeHtml(item.doc_path)}${item.line ? ':' + item.line : ''}</div>
+      </div>`).join('');
+}
+
+$('check-drift').addEventListener('click', async () => {
+  busy('Проверяем ссылки, значения и пометки…');
+  try {
+    renderDrift(await Api.drift($('change-text').value.trim()));
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
 /* ---------- шаг 3: поиск документа ---------- */
 
 function selectDoc(path, title, heading) {
   state.doc = { path, title: title || path };
   $('chosen-doc').textContent = `Выбран документ: ${state.doc.title} (${path})`;
   $('generate').disabled = false;
+  $('propose').disabled = false;
   document.querySelectorAll('.candidate').forEach((node) => {
     node.classList.toggle('candidate--active', node.dataset.path === path);
   });
@@ -291,6 +394,114 @@ function renderCandidates(candidates) {
   });
   selectDoc(candidates[0].path, candidates[0].title, candidates[0].heading);
 }
+
+
+/* ---------- правки по разделам: принимаем поштучно ---------- */
+
+function renderChangeset(data) {
+  state.changeset = data;
+  const box = $('changeset');
+  box.hidden = false;
+
+  if (!data.edits.length) {
+    box.innerHTML = '<p class="muted">Модель не предложила ни одной правки. '
+      + 'Уточните описание изменения или выберите раздел вручную.</p>';
+    return;
+  }
+
+  const summary = data.summary || {};
+  const header = `<div class="review__title">Предложено правок: ${summary.total}
+    · принято: ${summary.accepted} · отклонено: ${summary.rejected}
+    ${summary.assumptions ? `· предположений: ${summary.assumptions}` : ''}</div>`;
+
+  const edits = data.edits.map((edit) => {
+    const status = edit.status === 'accepted' ? ' edit--accepted'
+      : edit.status === 'rejected' ? ' edit--rejected' : '';
+    const assumption = edit.assumption
+      ? '<span class="tag tag--assumption">предположение</span>'
+      : '';
+    const reason = edit.reason
+      ? `<b>Основание:</b> «${escapeHtml(edit.reason)}»`
+      : '<b>Основание:</b> модель не привела цитату из описания';
+    return `
+      <div class="edit${status}" data-edit="${escapeHtml(edit.id)}">
+        <div class="edit__head">
+          <div class="edit__title">${escapeHtml(edit.section)}</div>
+          <div>${assumption}
+            <span class="tag tag--${escapeHtml(edit.confidence)}">уверенность: ${escapeHtml(edit.confidence)}</span>
+          </div>
+        </div>
+        <div class="edit__reason">${reason}</div>
+        <div class="edit__body">
+          <div class="edit__cell edit__cell--old"><div class="diff__label">было</div>${escapeHtml(edit.old)}</div>
+          <div class="edit__cell edit__cell--new"><div class="diff__label">станет</div>${escapeHtml(edit.new)}</div>
+        </div>
+        <div class="edit__actions">
+          <button class="btn" data-accept="${escapeHtml(edit.id)}">Принять</button>
+          <button class="btn btn--danger" data-reject="${escapeHtml(edit.id)}">Отклонить</button>
+          <input type="text" data-comment="${escapeHtml(edit.id)}" placeholder="почему отклоняете — сервис это запомнит">
+          <span class="muted">${edit.status === 'pending' ? '' : 'решение: ' + escapeHtml(edit.status)}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  const footer = `<div class="row">
+      <button class="btn btn--primary" id="build-changeset">Собрать документ из принятых</button>
+      <span class="muted">Незатронутые разделы останутся без изменений.</span>
+    </div>`;
+
+  box.innerHTML = header + edits + footer;
+
+  box.querySelectorAll('[data-accept]').forEach((button) => {
+    button.addEventListener('click', () => decideEdit(button.dataset.accept, true));
+  });
+  box.querySelectorAll('[data-reject]').forEach((button) => {
+    button.addEventListener('click', () => decideEdit(button.dataset.reject, false));
+  });
+  $('build-changeset').addEventListener('click', buildChangeset);
+}
+
+async function decideEdit(editId, accepted) {
+  const comment = $('changeset').querySelector(`[data-comment="${editId}"]`);
+  busy(accepted ? 'Принимаем правку…' : 'Отклоняем правку…');
+  try {
+    const data = await Api.decideEdit(
+      state.changeset.id, editId, accepted, comment ? comment.value : ''
+    );
+    renderChangeset(data);
+    toast(accepted ? 'Правка принята' : 'Правка отклонена — сервис это запомнил');
+  } catch (error) { showError(error); } finally { idle(); }
+}
+
+async function buildChangeset() {
+  busy('Собираем документ из принятых правок…');
+  try {
+    const data = await Api.buildChangeset(state.changeset.id);
+    finishResult({
+      ...data,
+      warnings: [],
+      style_guide_used: true,
+      checks: null,
+    });
+    await loadResults();
+    toast(`Готово: применено правок — ${data.applied_edits}. Оригинал не тронут.`);
+  } catch (error) { showError(error); } finally { idle(); }
+}
+
+$('propose').addEventListener('click', async () => {
+  const change = $('change-text').value.trim();
+  if (!state.doc) { toast('Сначала выберите документ', true); return; }
+  if (!change) { toast('Опишите, что изменилось', true); return; }
+
+  const sectionValue = $('section-select').value;
+  const body = { doc_path: state.doc.path, change_description: change };
+  if (sectionValue !== '') body.section_indexes = [Number(sectionValue)];
+
+  busy('Модель готовит правки по разделам с обоснованием…');
+  try {
+    renderChangeset(await Api.proposeChangeset(body));
+  } catch (error) { showError(error); } finally { idle(); }
+});
 
 /* ---------- шаг 5: diff ---------- */
 
@@ -584,6 +795,7 @@ async function generateStreaming(body) {
       setResultButtons(false);
       $('review-notes').hidden = true;
       $('checks-notes').hidden = true;
+      $('changeset').hidden = true;
       showTab('result');
       $('step-diff').scrollIntoView({ behavior: 'smooth' });
       idle();
@@ -713,6 +925,7 @@ $('apply').addEventListener('click', async () => {
 
 (async function init() {
   try {
+    await loadProducts();
     await loadStatus();
     await loadDocuments();
     await loadGuide();

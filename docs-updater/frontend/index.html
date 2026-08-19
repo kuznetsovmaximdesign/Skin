@@ -13,7 +13,12 @@
     <h1>Обновление документации</h1>
     <p>Всё считается локально: документы и модель не покидают ваш компьютер.</p>
   </div>
-  <div id="ollama-status" class="status status--wait">Проверяем Ollama…</div>
+  <div class="topbar__right">
+    <label class="topbar__product">Продукт
+      <select id="product-select"></select>
+    </label>
+    <div id="ollama-status" class="status status--wait">Проверяем Ollama…</div>
+  </div>
 </header>
 
 <main>
@@ -40,6 +45,7 @@
     <div class="row">
       <button class="btn" id="save-config">Сохранить настройки</button>
       <button class="btn btn--primary" id="reindex">Переиндексировать</button>
+      <button class="btn" id="build-map">Построить карту документов</button>
       <span class="muted" id="index-info">Индекс не построен</span>
     </div>
     <div class="hint">Путь можно писать относительно папки сервиса (<code>data/docs</code>) или полностью (<code>/Users/me/docs</code>).</div>
@@ -102,10 +108,14 @@
     <textarea id="change-text" rows="6" placeholder="Например: срок жизни токена увеличен с 60 до 120 минут, добавлен ручной отзыв токена через POST /v1/auth/revoke"></textarea>
     <div class="row">
       <button class="btn btn--primary" id="find-doc">Найти подходящий документ</button>
+      <button class="btn" id="find-impact">Все затронутые статьи</button>
+      <button class="btn" id="check-drift">На что ещё посмотреть</button>
       <span class="muted">или выберите вручную:</span>
       <select id="manual-doc"><option value="">— документ из папки —</option></select>
     </div>
     <div id="candidates" class="candidates"></div>
+    <div id="impact-list" class="impact" hidden></div>
+    <div id="drift-list" class="drift" hidden></div>
   </section>
 
   <!-- Шаг 4 -->
@@ -125,9 +135,11 @@
       </label>
       <span class="muted" id="section-hint"></span>
       <button class="btn btn--primary" id="generate" disabled>Обновить по гайду</button>
+      <button class="btn" id="propose" disabled>Предложить правки по разделам</button>
     </div>
     <div class="hint">Правка одного раздела безопаснее и быстрее: остальной текст документа модель вообще не видит и не может испортить.</div>
     <div id="warnings" class="warnings"></div>
+    <div id="changeset" class="changeset" hidden></div>
   </section>
 
   <!-- Шаг 5 -->
