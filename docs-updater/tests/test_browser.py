@@ -38,6 +38,15 @@ def find_chromium() -> str | None:
     return shutil.which("chromium") or shutil.which("google-chrome")
 
 
+def wait_generation_done(page, timeout: int = 120000) -> None:
+    """Ждём конца генерации: diff посчитан и кнопки результата снова активны."""
+    page.wait_for_function(
+        "() => document.querySelector('#diff-stats').textContent.includes('Изменено')"
+        " && !document.querySelector('#download').disabled",
+        timeout=timeout,
+    )
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -51,6 +60,7 @@ def live_server(tmp_path):
         pytest.skip("Локальный Chromium не найден")
 
     ollama = FakeOllama().start()
+    ollama.chunk_delay = 0.15  # чтобы поток был виден в браузере, а не мгновенным
     shutil.copytree(REPO_ROOT / "data" / "docs", tmp_path / "docs")
     shutil.copy(REPO_ROOT / "data" / "styleguide.md", tmp_path / "styleguide.md")
     config = tmp_path / "config.yaml"
@@ -137,9 +147,13 @@ def test_full_flow_in_browser(live_server):
         assert options[0] == "весь документ целиком"
         assert any("Срок жизни токена" in option for option in options)
 
-        # Шаг 4-5: обновление и diff
+        # Шаг 4-5: обновление. Текст появляется потоком, ещё до готового diff
         page.click("#generate")
-        page.wait_for_selector("#step-diff:not([hidden])", timeout=120000)
+        page.wait_for_function(
+            "() => document.querySelector('#result-view').value.length > 0", timeout=60000
+        )
+        assert "модель пишет" in page.inner_text("#marks-info")
+        wait_generation_done(page)
         assert page.eval_on_selector_all("ins", "e => e.length") >= 1
         assert page.eval_on_selector_all("del", "e => e.length") >= 1
         assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
@@ -162,11 +176,16 @@ def test_full_flow_in_browser(live_server):
         # правка одного раздела: выбираем раздел и обновляем только его
         page.select_option("#section-select", label="— Срок жизни токена")
         page.click("#generate")
-        page.wait_for_selector("#overlay", state="hidden", timeout=120000)
+        wait_generation_done(page)
         assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
 
-        # сохранённые результаты видны на странице
-        assert page.eval_on_selector_all(".result-row", "els => els.length") >= 2
+        # сохранённые результаты видны на странице (список обновляется после генерации)
+        page.wait_for_function(
+            "() => document.querySelectorAll('.result-row').length >= 2", timeout=30000
+        )
+        rows = page.inner_text("#results-list")
+        assert "api-auth.md" in rows
+        assert "Срок жизни токена доступа увеличен" in rows
 
         browser.close()
 

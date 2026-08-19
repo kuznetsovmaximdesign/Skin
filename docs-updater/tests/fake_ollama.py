@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,6 +28,8 @@ class FakeOllama:
     def __init__(self, models: list[str] | None = None) -> None:
         self.models = models if models is not None else ["qwen3:latest", "bge-m3:latest"]
         self.generate_response: str | None = None
+        # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
+        self.chunk_delay = 0.0
         self.requests: list[dict] = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server = server
@@ -57,6 +60,21 @@ class FakeOllama:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _send_stream(self, text: str) -> None:
+                """Ответ построчно, как настоящий Ollama: NDJSON с полями response/done."""
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.end_headers()
+                step = max(1, len(text) // 8)
+                for start in range(0, len(text), step):
+                    chunk = json.dumps({"response": text[start : start + step], "done": False})
+                    self.wfile.write(chunk.encode("utf-8") + b"\n")
+                    self.wfile.flush()
+                    if outer.chunk_delay:
+                        time.sleep(outer.chunk_delay)
+                self.wfile.write(json.dumps({"response": "", "done": True}).encode("utf-8") + b"\n")
+                self.wfile.flush()
+
             def _known(self, model: str) -> bool:
                 base = model.split(":")[0]
                 return any(name == model or name.split(":")[0] == base for name in outer.models)
@@ -85,7 +103,11 @@ class FakeOllama:
                 elif self.path == "/api/embeddings":
                     self._send(200, {"embedding": embed_text(payload.get("prompt", ""))})
                 elif self.path == "/api/generate":
-                    self._send(200, {"response": outer.render(payload.get("prompt", ""))})
+                    text = outer.render(payload.get("prompt", ""))
+                    if payload.get("stream"):
+                        self._send_stream(text)
+                    else:
+                        self._send(200, {"response": text})
                 else:
                     self._send(404, {"error": "not found"})
 

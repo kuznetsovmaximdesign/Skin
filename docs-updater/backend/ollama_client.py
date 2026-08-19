@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -142,6 +143,100 @@ class OllamaClient:
             else:
                 raise
         return clean_model_output(data.get("response", ""))
+
+    def generate_stream(
+        self,
+        model: str,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.2,
+        num_ctx: int = 16384,
+    ) -> Iterator[str]:
+        """Тот же запрос, но ответ отдаётся кусочками по мере генерации."""
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": True,
+            "think": False,
+            "options": {"temperature": temperature, "num_ctx": num_ctx},
+        }
+        if system:
+            payload["system"] = system
+
+        think = ThinkFilter()
+        try:
+            with httpx.stream(
+                "POST", f"{self.host}/api/generate", json=payload, timeout=self.timeout
+            ) as response:
+                if response.status_code == 404:
+                    raise self._model_missing(model)
+                if response.status_code >= 400:
+                    response.read()
+                    raise OllamaError(
+                        f"Ollama вернул ошибку {response.status_code}: {response.text[:300]}",
+                        hint="Проверьте название модели в config.yaml и вывод команды `ollama list`.",
+                    )
+                for line in response.iter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if data.get("error"):
+                        raise OllamaError(str(data["error"]), hint=f"Проверьте модель: `ollama pull {model}`")
+                    piece = think.feed(data.get("response", ""))
+                    if piece:
+                        yield piece
+                    if data.get("done"):
+                        break
+        except httpx.ConnectError as exc:
+            raise self._not_running() from exc
+        except httpx.ReadTimeout as exc:
+            raise OllamaError(
+                f"Ollama не ответил за {int(self.timeout)} с (модель «{model}»).",
+                hint="Увеличьте `ollama.request_timeout` в config.yaml или возьмите модель поменьше.",
+            ) from exc
+        tail = think.flush()
+        if tail:
+            yield tail
+
+
+class ThinkFilter:
+    """Выбрасывает блоки <think>…</think> из потока по мере поступления кусочков."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.inside = False
+
+    def feed(self, chunk: str) -> str:
+        self.buffer += chunk
+        out = []
+        while self.buffer:
+            if self.inside:
+                end = self.buffer.find("</think>")
+                if end == -1:
+                    # Возможно, закрывающий тег придёт следующим кусочком.
+                    self.buffer = self.buffer[-len("</think>") :] if len(self.buffer) > 8 else self.buffer
+                    break
+                self.buffer = self.buffer[end + len("</think>") :]
+                self.inside = False
+                continue
+            start = self.buffer.find("<think>")
+            if start == -1:
+                keep = min(len(self.buffer), len("<think>") - 1)
+                out.append(self.buffer[: len(self.buffer) - keep])
+                self.buffer = self.buffer[len(self.buffer) - keep :]
+                break
+            out.append(self.buffer[:start])
+            self.buffer = self.buffer[start + len("<think>") :]
+            self.inside = True
+        return "".join(out)
+
+    def flush(self) -> str:
+        rest = "" if self.inside else self.buffer
+        self.buffer = ""
+        return rest
 
 
 def clean_model_output(text: str) -> str:

@@ -590,3 +590,119 @@ def test_replace_section_keeps_the_rest_intact():
     spans = outline(content)
     updated = replace_section(content, spans[1], "## B\n\nвторой обновлённый")
     assert updated == "# A\n\nпервый\n\n## B\n\nвторой обновлённый\n\n## C\n\nтретий"
+
+
+def test_results_carry_the_change_description(client):
+    client.post(
+        "/api/generate",
+        json={
+            "doc_path": "api-auth.md",
+            "change_description": "Срок жизни токена — 120 минут.",
+            "section_index": 4,
+        },
+    )
+    item = client.get("/api/results").json()["results"][0]
+    assert item["doc_path"] == "api-auth.md"
+    assert item["change_description"] == "Срок жизни токена — 120 минут."
+    assert item["mode"] == "section"
+    assert item["section"].endswith("Срок жизни токена")
+    assert item["model"] == "qwen3"
+    assert "edited_at" not in item
+
+
+def test_manual_edit_is_marked_in_results(client):
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+    client.post(
+        "/api/results/save",
+        json={"doc_path": "api-auth.md", "result_file": data["result_file"], "content": "# Док\n\nТекст."},
+    )
+    item = client.get("/api/results").json()["results"][0]
+    assert item["edited_at"]
+    assert item["change_description"] == "правка"
+
+
+def test_meta_files_are_not_listed_as_results(client):
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    results = client.get("/api/results").json()["results"]
+    assert len(results) == 1
+    assert all(not item["file"].endswith(".json") for item in results)
+
+
+# --- потоковая генерация ---------------------------------------------------
+
+
+def read_stream(response) -> list[dict]:
+    return [json_module.loads(line) for line in response.text.splitlines() if line.strip()]
+
+
+def test_generate_stream_sends_text_as_it_comes(client):
+    with client.stream(
+        "POST",
+        "/api/generate/stream",
+        json={"doc_path": "api-auth.md", "change_description": "Срок жизни токена — 120 минут."},
+    ) as response:
+        assert response.status_code == 200
+        events = [json_module.loads(line) for line in response.iter_lines() if line.strip()]
+
+    kinds = [event["type"] for event in events]
+    assert kinds[0] == "start"
+    assert kinds[-1] == "done"
+    assert kinds.count("chunk") > 1  # текст пришёл несколькими порциями
+
+    streamed = "".join(event["text"] for event in events if event["type"] == "chunk")
+    assert "120 минут" in streamed
+    assert "<think>" not in streamed and "рассуждения модели" not in streamed
+
+    done = events[-1]
+    assert done["updated"].startswith("# Авторизация в API")
+    assert done["diff"]["has_changes"] is True
+    assert (client.tmp_path / "output" / done["result_file"]).exists()
+    assert "60 минут" in (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+
+
+def test_generate_stream_for_a_single_section(client):
+    with client.stream(
+        "POST",
+        "/api/generate/stream",
+        json={
+            "doc_path": "api-auth.md",
+            "change_description": "Срок жизни токена — 120 минут.",
+            "section_index": 4,
+        },
+    ) as response:
+        events = [json_module.loads(line) for line in response.iter_lines() if line.strip()]
+
+    assert events[0]["mode"] == "section"
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["updated"].count("## Ограничения") == 1
+    assert "120 минут" in done["updated"]
+
+
+def test_generate_stream_reports_missing_model_before_streaming(client):
+    client.ollama.models = ["bge-m3:latest"]
+    response = client.post(
+        "/api/generate/stream", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    )
+    assert response.status_code == 503
+    assert "ollama pull qwen3" in response.json()["hint"]
+
+
+def test_generate_stream_reports_empty_answer(client):
+    client.ollama.generate_response = "   "
+    response = client.post(
+        "/api/generate/stream", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    )
+    events = read_stream(response)
+    assert events[-1]["type"] == "error"
+    assert "пустой ответ" in events[-1]["error"]
+
+
+def test_think_filter_survives_split_tags():
+    from backend.ollama_client import ThinkFilter
+
+    filtered = ThinkFilter()
+    parts = ["Начало ", "<thi", "nk>рассуж", "дения</thi", "nk>", " конец"]
+    assert "".join(filtered.feed(part) for part in parts) + filtered.flush() == "Начало  конец"

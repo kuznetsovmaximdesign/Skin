@@ -127,11 +127,25 @@ async function loadResults() {
     box.innerHTML = '<p class="muted">Пока пусто. Обновлённые документы появятся здесь.</p>';
     return;
   }
-  box.innerHTML = data.results.map((item) => `
+  box.innerHTML = data.results.map((item) => {
+    const scope = item.mode === 'section' && item.section
+      ? `раздел «${escapeHtml(item.section.split(' > ').pop())}»`
+      : 'весь документ';
+    const description = item.change_description
+      ? escapeHtml(item.change_description.length > 90
+          ? item.change_description.slice(0, 90) + '…'
+          : item.change_description)
+      : '';
+    const edited = item.edited_at ? ' · правлено вручную' : '';
+    return `
     <div class="result-row">
-      <a href="/api/download?file=${encodeURIComponent(item.file)}">${escapeHtml(item.file)}</a>
-      <span class="result-row__meta">${escapeHtml(item.saved_at)} · ${Math.round(item.size / 1024)} КБ</span>
-    </div>`).join('');
+      <div class="result-row__main">
+        <a href="/api/download?file=${encodeURIComponent(item.file)}">${escapeHtml(item.doc_path || item.file)}</a>
+        ${description ? `<div class="result-row__desc">${description}</div>` : ''}
+      </div>
+      <span class="result-row__meta">${escapeHtml(item.saved_at)} · ${scope}${edited}</span>
+    </div>`;
+  }).join('');
 }
 
 async function loadGuide() {
@@ -319,30 +333,132 @@ $('manual-doc').addEventListener('change', (event) => {
   }
 });
 
+function setResultButtons(enabled) {
+  ['save-edits', 'download', 'apply'].forEach((id) => { $(id).disabled = !enabled; });
+}
+
+function showTab(view) {
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.classList.toggle('tab--active', tab.dataset.view === view);
+  });
+  $('result-pane').hidden = view !== 'result';
+  $('diff-view').hidden = view === 'result';
+}
+
+function finishResult(data) {
+  state.result = data;
+  renderWarnings((data.warnings || []).concat(data.style_guide_used ? [] : ['Гайд по стилю пуст — правки сделаны без него.']));
+  renderDiff(data.diff);
+  $('result-view').value = data.updated;
+  countMarks(data.updated);
+  $('result-file').textContent = data.result_path;
+  setResultButtons(true);
+  showTab('diff');
+  if (!data.diff.has_changes) toast('Модель ничего не изменила — уточните описание правки', true);
+  else toast('Готово. Оригинал не тронут, результат сохранён отдельным файлом.');
+}
+
+/* Потоковая генерация: текст появляется по мере того, как модель его пишет. */
+async function generateStreaming(body) {
+  const response = await fetch('/api/generate/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let data = null;
+    try { data = await response.json(); } catch (e) { data = null; }
+    const error = new Error((data && (data.error || data.detail)) || `Ошибка ${response.status}`);
+    error.hint = data && data.hint;
+    throw error;
+  }
+  if (!response.body || !response.body.getReader) return false; // старый браузер — вернёмся к обычному запросу
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const startedAt = Date.now();
+  let buffer = '';
+  let text = '';
+  let finished = null;
+
+  const showProgress = () => {
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    $('marks-info').textContent = `модель пишет… ${clock}, символов: ${text.length}`;
+  };
+
+  const handle = (event) => {
+    if (event.type === 'start') {
+      $('step-diff').hidden = false;
+      $('result-view').value = '';
+      $('diff-view').innerHTML = '';
+      $('diff-stats').textContent = '';
+      renderWarnings(event.warnings || []);
+      setResultButtons(false);
+      showTab('result');
+      $('step-diff').scrollIntoView({ behavior: 'smooth' });
+      idle();
+    } else if (event.type === 'chunk') {
+      text += event.text;
+      $('result-view').value = text;
+      $('result-view').scrollTop = $('result-view').scrollHeight;
+      showProgress();
+    } else if (event.type === 'error') {
+      const error = new Error(event.error);
+      error.hint = event.hint;
+      throw error;
+    } else if (event.type === 'done') {
+      finished = event;
+    }
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.trim()) handle(JSON.parse(line));
+    }
+  }
+  if (buffer.trim()) handle(JSON.parse(buffer));
+
+  if (!finished) throw new Error('Поток оборвался, результат не получен. Повторите запрос.');
+  finishResult(finished);
+  await loadResults();
+  return true;
+}
+
 $('generate').addEventListener('click', async () => {
   const change = $('change-text').value.trim();
   if (!state.doc) { toast('Сначала выберите документ', true); return; }
   if (!change) { toast('Опишите, что изменилось', true); return; }
+
   const sectionValue = $('section-select').value;
   const body = { doc_path: state.doc.path, change_description: change };
   if (sectionValue !== '') body.section_index = Number(sectionValue);
+
   busy(sectionValue === ''
-    ? 'Модель обновляет документ целиком. Обычно это от 30 секунд.'
-    : 'Модель обновляет выбранный раздел. Это быстрее, чем весь документ.');
+    ? 'Модель обновляет документ целиком. Сейчас начнёт писать…'
+    : 'Модель обновляет выбранный раздел. Сейчас начнёт писать…');
+  $('generate').disabled = true;
   try {
-    const data = await json('/api/generate', body);
-    state.result = data;
-    renderWarnings(data.warnings.concat(data.style_guide_used ? [] : ['Гайд по стилю пуст — правки сделаны без него.']));
-    renderDiff(data.diff);
-    $('result-view').value = data.updated;
-    countMarks(data.updated);
-    $('result-file').textContent = data.result_path;
-    $('step-diff').hidden = false;
-    $('step-diff').scrollIntoView({ behavior: 'smooth' });
-    await loadResults();
-    if (!data.diff.has_changes) toast('Модель ничего не изменила — уточните описание правки', true);
-    else toast('Готово. Оригинал не тронут, результат сохранён отдельным файлом.');
-  } catch (error) { showError(error); } finally { idle(); }
+    const streamed = await generateStreaming(body);
+    if (!streamed) {
+      const data = await json('/api/generate', body);
+      finishResult(data);
+      await loadResults();
+    }
+  } catch (error) {
+    showError(error);
+    setResultButtons(true);
+  } finally {
+    idle();
+    $('marks-info').textContent = state.result ? $('marks-info').textContent : '';
+    if (state.result) countMarks(state.result.updated);
+    $('generate').disabled = false;
+  }
 });
 
 $('only-changes').addEventListener('change', (event) => {
@@ -350,13 +466,7 @@ $('only-changes').addEventListener('change', (event) => {
 });
 
 document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((other) => other.classList.remove('tab--active'));
-    tab.classList.add('tab--active');
-    const showResult = tab.dataset.view === 'result';
-    $('result-pane').hidden = !showResult;
-    $('diff-view').hidden = showResult;
-  });
+  tab.addEventListener('click', () => showTab(tab.dataset.view));
 });
 
 $('save-edits').addEventListener('click', async () => {

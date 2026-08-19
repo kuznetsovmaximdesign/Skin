@@ -94,19 +94,15 @@ def build_section_prompt(
 Верни только обновлённый раздел целиком, начиная с его заголовка."""
 
 
-def generate_update(
+def prepare_generation(
     config: dict[str, Any],
-    client: OllamaClient,
     document: str,
     change_description: str,
     style_guide: str,
     doc_path: str,
     section: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Обновляет документ целиком или один его раздел (тогда в модель уходит только раздел)."""
-    model = config["ollama"]["generation_model"]
-    client.ensure_model(model)
-
+    """Собирает всё, что нужно модели: промпт, системную инструкцию и предупреждения о размере."""
     num_ctx = int(config["generation"]["num_ctx"])
     if section:
         original = section["text"]
@@ -123,20 +119,44 @@ def generate_update(
         original = document
         prompt = build_prompt(document, change_description, style_guide, doc_path)
         system = SYSTEM_PROMPT
-    size_warnings = check_context_size(prompt, original, num_ctx)
+    return {
+        "prompt": prompt,
+        "system": system,
+        "original": original,
+        "num_ctx": num_ctx,
+        "temperature": float(config["generation"]["temperature"]),
+        "model": config["ollama"]["generation_model"],
+        "mode": "section" if section else "document",
+        "warnings": check_context_size(prompt, original, num_ctx),
+    }
+
+
+def generate_update(
+    config: dict[str, Any],
+    client: OllamaClient,
+    document: str,
+    change_description: str,
+    style_guide: str,
+    doc_path: str,
+    section: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Обновляет документ целиком или один его раздел (тогда в модель уходит только раздел)."""
+    plan = prepare_generation(config, document, change_description, style_guide, doc_path, section)
+    client.ensure_model(plan["model"])
+
     updated = client.generate(
-        model=model,
-        prompt=prompt,
-        system=system,
-        temperature=float(config["generation"]["temperature"]),
-        num_ctx=num_ctx,
+        model=plan["model"],
+        prompt=plan["prompt"],
+        system=plan["system"],
+        temperature=plan["temperature"],
+        num_ctx=plan["num_ctx"],
     )
 
     return {
         "content": updated,
-        "warnings": size_warnings + check_result(original, updated),
-        "model": model,
-        "mode": "section" if section else "document",
+        "warnings": plan["warnings"] + check_result(plan["original"], updated),
+        "model": plan["model"],
+        "mode": plan["mode"],
     }
 
 
