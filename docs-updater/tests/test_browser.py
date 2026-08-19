@@ -131,6 +131,12 @@ def test_full_flow_in_browser(live_server):
         assert candidates[0] == "api-auth.md"
         assert "api-auth.md" in page.inner_text("#chosen-doc")
 
+        # список разделов документа подтянулся
+        page.wait_for_function("() => !document.querySelector('#section-select').disabled", timeout=30000)
+        options = page.eval_on_selector_all("#section-select option", "els => els.map(e => e.textContent.trim())")
+        assert options[0] == "весь документ целиком"
+        assert any("Срок жизни токена" in option for option in options)
+
         # Шаг 4-5: обновление и diff
         page.click("#generate")
         page.wait_for_selector("#step-diff:not([hidden])", timeout=120000)
@@ -144,9 +150,23 @@ def test_full_flow_in_browser(live_server):
         visible_after = page.eval_on_selector_all(".diff__equal", "els => els.filter(e => e.offsetParent).length")
         assert visible_before > 0 and visible_after == 0
 
-        # вкладка с готовым документом
+        # вкладка с готовым документом: текст можно править прямо на странице
         page.click(".tab[data-view='result']")
-        assert page.inner_text("#result-view").startswith("# Авторизация в API")
+        assert page.input_value("#result-view").startswith("# Авторизация в API")
+        page.fill("#result-view", page.input_value("#result-view") + "\n\nДописано вручную.\n")
+        page.click("#save-edits")
+        page.wait_for_selector("#overlay", state="hidden", timeout=60000)
+        page.click(".tab[data-view='diff']")
+        assert "Добавлено: 1" in page.inner_text("#diff-stats")
+
+        # правка одного раздела: выбираем раздел и обновляем только его
+        page.select_option("#section-select", label="— Срок жизни токена")
+        page.click("#generate")
+        page.wait_for_selector("#overlay", state="hidden", timeout=120000)
+        assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
+
+        # сохранённые результаты видны на странице
+        assert page.eval_on_selector_all(".result-row", "els => els.length") >= 2
 
         browser.close()
 

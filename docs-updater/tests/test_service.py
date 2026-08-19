@@ -17,6 +17,7 @@ from backend import config as config_module  # noqa: E402
 from backend.diffing import build_diff, split_paragraphs  # noqa: E402
 from backend.generator import build_prompt, check_context_size, check_result  # noqa: E402
 from backend.ollama_client import clean_model_output  # noqa: E402
+from backend.sections import outline, replace_section, section_text  # noqa: E402
 from backend.search import cosine, to_percent  # noqa: E402
 from tests.fake_ollama import FakeOllama  # noqa: E402
 
@@ -474,3 +475,118 @@ def test_two_results_in_the_same_second_do_not_overwrite(client):
     output = client.tmp_path / "output"
     assert (output / first["result_file"]).read_text(encoding="utf-8") == first["updated"]
     assert (output / second["result_file"]).read_text(encoding="utf-8") == second["updated"]
+
+
+# --- правка одного раздела -------------------------------------------------
+
+
+def test_outline_lists_sections(client):
+    data = client.get("/api/outline", params={"path": "api-auth.md"}).json()
+    titles = [section["title"] for section in data["sections"]]
+    assert titles == [
+        "Авторизация в API",
+        "Назначение",
+        "Предварительные условия",
+        "Получение токена",
+        "Срок жизни токена",
+        "Ограничения",
+    ]
+    assert all(section["chars"] > 0 for section in data["sections"])
+
+
+def test_generate_updates_only_the_chosen_section(client):
+    original = (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+    target_index = 4  # «Срок жизни токена»
+
+    data = client.post(
+        "/api/generate",
+        json={
+            "doc_path": "api-auth.md",
+            "change_description": "Срок жизни токена — 120 минут.",
+            "section_index": target_index,
+        },
+    ).json()
+
+    assert data["mode"] == "section"
+    assert data["section"] == "Авторизация в API > Срок жизни токена"
+    assert "120 минут" in data["updated"]
+
+    # все разделы, кроме выбранного, остались дословно теми же
+    # (родительский раздел «Авторизация в API» содержит выбранный, поэтому его пропускаем)
+    spans_before = outline(original)
+    spans_after = outline(data["updated"])
+    assert len(spans_before) == len(spans_after)
+    target = spans_before[target_index]
+    compared = 0
+    for before, after in zip(spans_before, spans_after):
+        contains_target = before.start <= target.start and before.end >= target.end
+        if contains_target:
+            continue
+        assert section_text(original, before) == section_text(data["updated"], after)
+        compared += 1
+    assert compared == 4  # четыре нетронутых раздела рядом
+
+    # в модель уходил только раздел, а не весь документ
+    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    assert "РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ" in prompt
+    assert "Предварительные условия\n\n- Учётная запись" not in prompt
+
+
+def test_generate_with_unknown_section(client):
+    response = client.post(
+        "/api/generate",
+        json={"doc_path": "api-auth.md", "change_description": "правка", "section_index": 99},
+    )
+    assert response.status_code == 400
+    assert "раздела нет" in response.json()["detail"]
+
+
+def test_manual_edits_are_saved_and_rediffed(client):
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+    edited = data["updated"].replace("120 минут", "90 минут") + "\n\nДописано вручную.\n"
+
+    saved = client.post(
+        "/api/results/save",
+        json={"doc_path": "api-auth.md", "result_file": data["result_file"], "content": edited},
+    ).json()
+
+    assert saved["result_file"] == data["result_file"]
+    assert (client.tmp_path / "output" / data["result_file"]).read_text(encoding="utf-8") == edited
+    assert saved["diff"]["stats"]["added"] >= 1
+    # оригинал по-прежнему нетронут
+    assert "60 минут" in (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+
+
+def test_manual_edits_reject_unknown_result(client):
+    response = client.post(
+        "/api/results/save",
+        json={"doc_path": "api-auth.md", "result_file": "нет-такого.md", "content": "текст"},
+    )
+    assert response.status_code == 404
+
+
+# --- разбор разделов -------------------------------------------------------
+
+
+def test_outline_ignores_headings_inside_code_fences():
+    content = "# Док\n\nТекст.\n\n```bash\n# это команда, не заголовок\n```\n\n## Раздел\n\nЕщё текст."
+    spans = outline(content)
+    assert [span.title for span in spans] == ["Док", "Раздел"]
+
+
+def test_outline_nests_levels():
+    content = "# A\n\nтекст\n\n## B\n\nтекст\n\n### C\n\nтекст\n\n## D\n\nтекст"
+    spans = outline(content)
+    assert [span.path for span in spans] == ["A", "A > B", "A > B > C", "A > D"]
+    # раздел B заканчивается там, где начинается D, и включает вложенный C
+    assert "### C" in section_text(content, spans[1])
+    assert "## D" not in section_text(content, spans[1])
+
+
+def test_replace_section_keeps_the_rest_intact():
+    content = "# A\n\nпервый\n\n## B\n\nвторой\n\n## C\n\nтретий"
+    spans = outline(content)
+    updated = replace_section(content, spans[1], "## B\n\nвторой обновлённый")
+    assert updated == "# A\n\nпервый\n\n## B\n\nвторой обновлённый\n\n## C\n\nтретий"

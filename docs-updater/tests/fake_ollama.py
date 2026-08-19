@@ -92,10 +92,14 @@ class FakeOllama:
         return Handler
 
     def render(self, prompt: str) -> str:
-        """По умолчанию возвращает исходный документ из промпта с одной правкой."""
+        """По умолчанию возвращает присланный текст (документ или раздел) с одной правкой."""
         if self.generate_response is not None:
             return self.generate_response
-        match = re.search(r"# ИСХОДНЫЙ ДОКУМЕНТ.*?\n\n(.*?)\n\n# ЧТО ИЗМЕНИЛОСЬ", prompt, re.DOTALL)
-        document = match.group(1) if match else "# Пустой документ"
-        updated = document.replace("Токен действует 60 минут.", "Токен действует 120 минут.")
+        match = re.search(
+            r"# (?:ИСХОДНЫЙ ДОКУМЕНТ|РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ).*?\n\n(.*?)\n\n# ЧТО ИЗМЕНИЛОСЬ",
+            prompt,
+            re.DOTALL,
+        )
+        source = match.group(1) if match else "# Пустой документ"
+        updated = source.replace("Токен действует 60 минут.", "Токен действует 120 минут.")
         return f"<think>рассуждения модели</think>\n{updated}\n"

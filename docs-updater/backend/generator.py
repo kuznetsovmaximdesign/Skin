@@ -21,6 +21,17 @@ SYSTEM_PROMPT = """Ты — технический редактор докуме
 6. Пиши на языке исходного документа.
 7. Ответ — только Markdown документа. Без ``` вокруг всего ответа, без вступлений вроде «Вот обновлённый документ»."""
 
+SYSTEM_PROMPT_SECTION = """Ты — технический редактор документации. Ты обновляешь ОДИН раздел существующего Markdown-документа.
+
+Железные правила:
+1. Возвращай только этот раздел целиком, начиная с его заголовка. Ничего из других разделов не добавляй и не повторяй.
+2. Сохраняй заголовок раздела и его уровень (число символов #) без изменений.
+3. Меняй только то, что затронуто описанием изменения. Остальные предложения переноси дословно.
+4. Не выдумывай факты: версии, числа, имена, названия параметров, даты. Если данных не хватает — вставь пометку [уточнить] (можно с вопросом: «[уточнить: номер версии]»).
+5. Гайд по стилю имеет приоритет. Если описание изменения противоречит гайду — следуй гайду и пометь спорное место как [спорно: краткое описание конфликта].
+6. Пиши на языке исходного документа.
+7. Ответ — только Markdown раздела. Без ``` вокруг всего ответа, без вступлений и комментариев."""
+
 
 def build_prompt(document: str, change_description: str, style_guide: str, doc_path: str) -> str:
     guide = (style_guide or "").strip()
@@ -47,6 +58,42 @@ def build_prompt(document: str, change_description: str, style_guide: str, doc_p
 Верни полный обновлённый Markdown-документ и ничего кроме него."""
 
 
+def build_section_prompt(
+    outline_text: str,
+    section: str,
+    change_description: str,
+    style_guide: str,
+    doc_path: str,
+    section_path: str,
+) -> str:
+    guide = (style_guide or "").strip()
+    if len(guide) > MAX_GUIDE_CHARS:
+        guide = guide[:MAX_GUIDE_CHARS] + "\n\n[гайд обрезан по длине]"
+    if not guide:
+        guide = "(гайд по стилю не подключён — сохраняй стиль исходного документа)"
+
+    return f"""# ГАЙД ПО СТИЛЮ (обязателен к соблюдению)
+
+{guide}
+
+# ОГЛАВЛЕНИЕ ДОКУМЕНТА {doc_path} (для контекста, менять не нужно)
+
+{outline_text}
+
+# РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ ({section_path})
+
+{section}
+
+# ЧТО ИЗМЕНИЛОСЬ / ЧТО НУЖНО ОТРАЗИТЬ
+
+{change_description.strip()}
+
+# ЗАДАНИЕ
+
+Внеси описанное изменение в этот раздел по правилам гайда по стилю.
+Верни только обновлённый раздел целиком, начиная с его заголовка."""
+
+
 def generate_update(
     config: dict[str, Any],
     client: OllamaClient,
@@ -54,25 +101,42 @@ def generate_update(
     change_description: str,
     style_guide: str,
     doc_path: str,
+    section: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Обновляет документ целиком или один его раздел (тогда в модель уходит только раздел)."""
     model = config["ollama"]["generation_model"]
     client.ensure_model(model)
 
     num_ctx = int(config["generation"]["num_ctx"])
-    prompt = build_prompt(document, change_description, style_guide, doc_path)
-    size_warnings = check_context_size(prompt, document, num_ctx)
+    if section:
+        original = section["text"]
+        prompt = build_section_prompt(
+            section.get("outline", ""),
+            original,
+            change_description,
+            style_guide,
+            doc_path,
+            section.get("path", section.get("title", "")),
+        )
+        system = SYSTEM_PROMPT_SECTION
+    else:
+        original = document
+        prompt = build_prompt(document, change_description, style_guide, doc_path)
+        system = SYSTEM_PROMPT
+    size_warnings = check_context_size(prompt, original, num_ctx)
     updated = client.generate(
         model=model,
         prompt=prompt,
-        system=SYSTEM_PROMPT,
+        system=system,
         temperature=float(config["generation"]["temperature"]),
         num_ctx=num_ctx,
     )
 
     return {
         "content": updated,
-        "warnings": size_warnings + check_result(document, updated),
+        "warnings": size_warnings + check_result(original, updated),
         "model": model,
+        "mode": "section" if section else "document",
     }
 
 

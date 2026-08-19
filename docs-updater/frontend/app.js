@@ -26,6 +26,7 @@ const json = (path, body) => api(path, {
 
 /* ---------- интерфейсные мелочи ---------- */
 
+let busyTimer = null;
 let toastTimer = null;
 function toast(text, bad = false) {
   const node = $('toast');
@@ -37,10 +38,23 @@ function toast(text, bad = false) {
 }
 
 function busy(text) {
-  $('overlay-text').textContent = text || 'Работаем…';
+  const message = text || 'Работаем…';
+  const startedAt = Date.now();
+  const tick = () => {
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    $('overlay-text').textContent = `${message} (${clock})`;
+  };
+  tick();
+  clearInterval(busyTimer);
+  busyTimer = setInterval(tick, 1000);
   $('overlay').hidden = false;
 }
-const idle = () => { $('overlay').hidden = true; };
+
+const idle = () => {
+  clearInterval(busyTimer);
+  $('overlay').hidden = true;
+};
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (ch) => (
@@ -137,6 +151,24 @@ function selectDoc(path, title) {
   document.querySelectorAll('.candidate').forEach((node) => {
     node.classList.toggle('candidate--active', node.dataset.path === path);
   });
+  loadOutline(path);
+}
+
+async function loadOutline(path) {
+  const select = $('section-select');
+  select.disabled = true;
+  select.innerHTML = '<option value="">весь документ целиком</option>';
+  try {
+    const data = await api('/api/outline?path=' + encodeURIComponent(path));
+    select.innerHTML = '<option value="">весь документ целиком</option>' +
+      data.sections.map((section) => {
+        const indent = '— '.repeat(Math.max(0, section.level - 1));
+        return `<option value="${section.index}">${escapeHtml(indent + section.title)}</option>`;
+      }).join('');
+    select.disabled = false;
+  } catch (error) {
+    select.disabled = true;
+  }
 }
 
 function renderCandidates(candidates) {
@@ -198,6 +230,16 @@ function renderDiff(diff) {
       <div class="diff__cell diff__cell--del"><div class="diff__label">было</div>${renderInline(inline.old)}</div>
       <div class="diff__cell diff__cell--add"><div class="diff__label">стало</div>${renderInline(inline.new)}</div></div>`;
   }).join('');
+}
+
+function countMarks(text) {
+  const unclear = (text.match(/\[уточнить[^\]]*\]/g) || []).length;
+  const disputed = (text.match(/\[спорно:[^\]]*\]/g) || []).length;
+  const parts = [];
+  if (unclear) parts.push(`пометок [уточнить]: ${unclear}`);
+  if (disputed) parts.push(`спорных мест: ${disputed}`);
+  $('marks-info').textContent = parts.join(' · ');
+  return unclear + disputed;
 }
 
 function renderWarnings(warnings) {
@@ -281,13 +323,19 @@ $('generate').addEventListener('click', async () => {
   const change = $('change-text').value.trim();
   if (!state.doc) { toast('Сначала выберите документ', true); return; }
   if (!change) { toast('Опишите, что изменилось', true); return; }
-  busy('Модель обновляет документ. Это самая долгая часть — обычно от 30 секунд.');
+  const sectionValue = $('section-select').value;
+  const body = { doc_path: state.doc.path, change_description: change };
+  if (sectionValue !== '') body.section_index = Number(sectionValue);
+  busy(sectionValue === ''
+    ? 'Модель обновляет документ целиком. Обычно это от 30 секунд.'
+    : 'Модель обновляет выбранный раздел. Это быстрее, чем весь документ.');
   try {
-    const data = await json('/api/generate', { doc_path: state.doc.path, change_description: change });
+    const data = await json('/api/generate', body);
     state.result = data;
     renderWarnings(data.warnings.concat(data.style_guide_used ? [] : ['Гайд по стилю пуст — правки сделаны без него.']));
     renderDiff(data.diff);
-    $('result-view').textContent = data.updated;
+    $('result-view').value = data.updated;
+    countMarks(data.updated);
     $('result-file').textContent = data.result_path;
     $('step-diff').hidden = false;
     $('step-diff').scrollIntoView({ behavior: 'smooth' });
@@ -306,9 +354,27 @@ document.querySelectorAll('.tab').forEach((tab) => {
     document.querySelectorAll('.tab').forEach((other) => other.classList.remove('tab--active'));
     tab.classList.add('tab--active');
     const showResult = tab.dataset.view === 'result';
-    $('result-view').hidden = !showResult;
+    $('result-pane').hidden = !showResult;
     $('diff-view').hidden = showResult;
   });
+});
+
+$('save-edits').addEventListener('click', async () => {
+  if (!state.result) return;
+  busy('Сохраняем правки и пересчитываем различия…');
+  try {
+    const data = await json('/api/results/save', {
+      doc_path: state.result.doc_path,
+      result_file: state.result.result_file,
+      content: $('result-view').value,
+    });
+    state.result = { ...state.result, updated: data.updated, diff: data.diff };
+    renderDiff(data.diff);
+    renderWarnings(data.warnings);
+    countMarks(data.updated);
+    await loadResults();
+    toast('Правки сохранены, сравнение пересчитано');
+  } catch (error) { showError(error); } finally { idle(); }
 });
 
 $('download').addEventListener('click', () => {

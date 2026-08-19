@@ -130,9 +130,11 @@ del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 
 
 .result {
   margin-top: 14px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 10px;
-  white-space: pre-wrap; word-wrap: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px; max-height: 640px; overflow: auto;
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; line-height: 1.6; resize: vertical;
 }
+.grow { flex: 1; min-width: 240px; }
+.mark { background: #fff1cc; color: var(--warn); border-radius: 3px; padding: 0 3px; }
 
 .results-list { margin-top: 12px; display: grid; gap: 6px; }
 .result-row {

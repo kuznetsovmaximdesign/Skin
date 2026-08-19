@@ -85,8 +85,16 @@
     </div>
     <div class="row">
       <div class="chosen" id="chosen-doc">Документ не выбран</div>
-      <button class="btn btn--primary" id="generate" disabled>Обновить документ по гайду</button>
     </div>
+    <div class="row">
+      <label class="grow">Что править
+        <select id="section-select" disabled>
+          <option value="">весь документ целиком</option>
+        </select>
+      </label>
+      <button class="btn btn--primary" id="generate" disabled>Обновить по гайду</button>
+    </div>
+    <div class="hint">Правка одного раздела безопаснее и быстрее: остальной текст документа модель вообще не видит и не может испортить.</div>
     <div id="warnings" class="warnings"></div>
   </section>
 
@@ -99,6 +107,7 @@
     <div class="row row--between">
       <div class="stats" id="diff-stats"></div>
       <div class="row">
+        <span class="muted" id="marks-info"></span>
         <label class="check"><input type="checkbox" id="only-changes"> только изменения</label>
         <div class="tabs">
           <button class="tab tab--active" data-view="diff">Было / стало</button>
@@ -109,7 +118,13 @@
       </div>
     </div>
     <div id="diff-view" class="diff"></div>
-    <pre id="result-view" class="result" hidden></pre>
+    <div id="result-pane" hidden>
+      <textarea id="result-view" class="result" rows="24" spellcheck="false"></textarea>
+      <div class="row">
+        <button class="btn" id="save-edits">Сохранить мои правки и пересчитать различия</button>
+        <span class="muted">Правки идут в тот же отдельный файл, оригинал не трогаем.</span>
+      </div>
+    </div>
     <p class="hint">Оригинал не меняется. Результат сохранён отдельным файлом: <span id="result-file" class="mono"></span>. Кнопка «Заменить оригинал» делает копию исходного файла с расширением <code>.bak-…</code>.</p>
   </section>
   <!-- Сохранённые результаты -->

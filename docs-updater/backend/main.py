@@ -16,10 +16,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import indexer, search
+from . import indexer, search, sections
 from .config import load_config, resolve_path, save_config
 from .diffing import build_diff, unified_diff
-from .generator import generate_update
+from .generator import check_result, generate_update
 from .ollama_client import OllamaClient, OllamaError
 
 app = FastAPI(title="Локальный сервис обновления документации", version="1.0.0")
@@ -90,6 +90,14 @@ class SearchRequest(BaseModel):
 class GenerateRequest(BaseModel):
     doc_path: str
     change_description: str = Field(min_length=1)
+    # Номер раздела из /api/outline. None — правим документ целиком.
+    section_index: int | None = None
+
+
+class SaveResultRequest(BaseModel):
+    doc_path: str
+    result_file: str
+    content: str = Field(min_length=1)
 
 
 class ApplyRequest(BaseModel):
@@ -228,6 +236,30 @@ def document(path: str) -> dict[str, Any]:
     return {"path": path, "content": indexer.read_text(target)}
 
 
+@app.get("/api/outline")
+def document_outline(path: str) -> dict[str, Any]:
+    """Разделы документа — чтобы править один раздел, а не весь текст."""
+    config = load_config()
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+    target = safe_join(docs_dir, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Документ не найден: {path}")
+    content = indexer.read_text(target)
+    return {
+        "path": path,
+        "sections": [
+            {
+                "index": span.index,
+                "level": span.level,
+                "title": span.title,
+                "path": span.path,
+                "chars": len(sections.section_text(content, span)),
+            }
+            for span in sections.outline(content)
+        ],
+    }
+
+
 # --- поиск -----------------------------------------------------------------
 
 
@@ -255,6 +287,21 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
 
     original = indexer.read_text(source)
     style_guide = read_style_guide(config)
+
+    section_payload = None
+    span = None
+    if payload.section_index is not None:
+        spans = sections.outline(original)
+        if not 0 <= payload.section_index < len(spans):
+            raise HTTPException(status_code=400, detail="Такого раздела нет в документе.")
+        span = spans[payload.section_index]
+        section_payload = {
+            "title": span.title,
+            "path": span.path,
+            "text": sections.section_text(original, span),
+            "outline": sections.document_map(original),
+        }
+
     result = generate_update(
         config=config,
         client=get_client(config),
@@ -262,10 +309,13 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
         change_description=payload.change_description,
         style_guide=style_guide,
         doc_path=payload.doc_path,
+        section=section_payload,
     )
     updated = result["content"]
     if not updated.strip():
         raise HTTPException(status_code=502, detail="Модель вернула пустой ответ. Повторите запрос.")
+    if span is not None:
+        updated = sections.replace_section(original, span, updated)
 
     # Результат — всегда отдельный файл, оригинал не трогаем.
     output_dir = resolve_path(config["paths"]["output_dir"])
@@ -281,6 +331,8 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
         "result_file": out_name,
         "result_path": str(out_path),
         "model": result["model"],
+        "mode": result["mode"],
+        "section": span.path if span else "",
         "style_guide_used": bool(style_guide.strip()),
         "original": original,
         "updated": updated,
@@ -298,6 +350,30 @@ def download(file: str) -> FileResponse:
     if not target.exists():
         raise HTTPException(status_code=404, detail="Файл результата не найден.")
     return FileResponse(target, media_type="text/markdown", filename=target.name)
+
+
+@app.post("/api/results/save")
+def save_result(payload: SaveResultRequest) -> dict[str, Any]:
+    """Сохраняет правки, внесённые писателем вручную. Оригинал по-прежнему не трогаем."""
+    config = load_config()
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+    output_dir = resolve_path(config["paths"]["output_dir"])
+    source = safe_join(docs_dir, payload.doc_path)
+    target = safe_join(output_dir, payload.result_file)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Исходный документ не найден.")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Файл результата не найден.")
+
+    target.write_text(payload.content, encoding="utf-8")
+    original = indexer.read_text(source)
+    return {
+        "result_file": target.name,
+        "result_path": str(target),
+        "updated": payload.content,
+        "diff": build_diff(original, payload.content),
+        "warnings": check_result(original, payload.content),
+    }
 
 
 @app.get("/api/results")
