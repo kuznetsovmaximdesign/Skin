@@ -80,7 +80,7 @@ def live_server(tmp_path):
 paths:
   docs_dir: "{tmp_path}/docs"
   style_guide: "{tmp_path}/styleguide.md"
-  index_file: "{tmp_path}/index.json"
+  index_file: "{tmp_path}/index.sqlite3"
   output_dir: "{tmp_path}/output"
 search: {{top_k: 5, chunk_max_chars: 1800}}
 generation: {{temperature: 0.2, num_ctx: 8192}}

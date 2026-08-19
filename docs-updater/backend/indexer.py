@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import index_store
 from .config import resolve_path
 from .ollama_client import OllamaClient
 
@@ -114,104 +114,116 @@ def section_hash(text: str) -> str:
 
 
 def build_index(config: dict[str, Any], client: OllamaClient) -> dict[str, Any]:
-    """Строит индекс. Секции, которые не изменились с прошлого раза, не пересчитываются."""
+    """Строит индекс по одному файлу за раз.
+
+    Вся документация в память не загружается: файл читается, режется на секции,
+    эмбеддинги считаются небольшими батчами и сразу пишутся в SQLite.
+    Секции, которые не изменились с прошлого раза, не пересчитываются.
+    """
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     model = config["ollama"]["embedding_model"]
     max_chars = int(config["search"]["chunk_max_chars"])
+    batch_size = max(1, int(config["search"].get("embed_batch", 8)))
 
     client.ensure_model(model)
 
     files = find_markdown_files(docs_dir)
-    sections: list[Section] = []
-    documents: list[dict[str, Any]] = []
-    for path in files:
-        content = read_text(path)
-        rel = path.relative_to(docs_dir).as_posix()
-        title = document_title(content, path)
-        file_sections = split_sections(content, rel, title, max_chars)
-        sections.extend(file_sections)
-        documents.append(
-            {
-                "path": rel,
-                "title": title,
-                "chars": len(content),
-                "sections": len(file_sections),
-                "modified": path.stat().st_mtime,
-            }
+    reused = 0
+    computed = 0
+
+    with index_store.connect(index_path(config)) as connection:
+        # Эмбеддинги из прошлого индекса годятся, только если та же модель и та же папка.
+        can_reuse = (
+            index_store.get_meta(connection, "embedding_model") == model
+            and index_store.get_meta(connection, "docs_dir") == str(docs_dir)
         )
+        index_store.prepare_rebuild(connection)
 
-    inputs = [embedding_input(section) for section in sections]
-    hashes = [section_hash(text) for text in inputs]
+        for path in files:
+            content = read_text(path)
+            rel = path.relative_to(docs_dir).as_posix()
+            title = document_title(content, path)
+            file_sections = split_sections(content, rel, title, max_chars)
 
-    known = reusable_embeddings(config, model, str(docs_dir))
-    missing = [text for text, digest in zip(inputs, hashes) if digest not in known]
-    fresh: dict[str, list[float]] = {}
-    batch_size = 16
-    for start in range(0, len(missing), batch_size):
-        batch = missing[start : start + batch_size]
-        for text, vector in zip(batch, client.embed(model, batch)):
-            fresh[section_hash(text)] = vector
+            for start in range(0, len(file_sections), batch_size):
+                batch = file_sections[start : start + batch_size]
+                inputs = [embedding_input(section) for section in batch]
+                digests = [section_hash(text) for text in inputs]
 
-    vectors = [known.get(digest) or fresh.get(digest, []) for digest in hashes]
+                vectors: list[list[float] | None] = []
+                pending: list[str] = []
+                for text, digest in zip(inputs, digests):
+                    known = index_store.find_embedding(connection, digest) if can_reuse else None
+                    vectors.append(known)
+                    if known is None:
+                        pending.append(text)
 
-    index = {
-        "version": 2,
-        "docs_dir": str(docs_dir),
-        "embedding_model": model,
-        "documents": documents,
-        "reused_sections": len(sections) - len(missing),
-        "computed_sections": len(missing),
-        "sections": [
-            {**asdict(section), "hash": digest, "embedding": vector}
-            for section, digest, vector in zip(sections, hashes, vectors)
-        ],
-    }
-    save_index(config, index)
-    return index
+                fresh = client.embed(model, pending) if pending else []
+                fresh_iter = iter(fresh)
+                rows = []
+                for section, digest, vector in zip(batch, digests, vectors):
+                    if vector is None:
+                        vector = next(fresh_iter, [])
+                        computed += 1
+                    else:
+                        reused += 1
+                    rows.append(
+                        (
+                            section.doc_path,
+                            section.doc_title,
+                            section.heading,
+                            section.text,
+                            section.start_line,
+                            digest,
+                            index_store.pack(vector),
+                        )
+                    )
+                index_store.add_sections(connection, rows)
 
+            index_store.add_document(
+                connection,
+                {
+                    "path": rel,
+                    "title": title,
+                    "chars": len(content),
+                    "sections": len(file_sections),
+                    "modified": path.stat().st_mtime,
+                },
+            )
+            del content, file_sections
 
-def reusable_embeddings(config: dict[str, Any], model: str, docs_dir: str) -> dict[str, list[float]]:
-    """Эмбеддинги из прошлого индекса — годятся, только если та же модель и та же папка."""
-    previous = load_index(config)
-    if not previous or previous.get("embedding_model") != model or previous.get("docs_dir") != docs_dir:
-        return {}
-    return {
-        section["hash"]: section["embedding"]
-        for section in previous.get("sections", [])
-        if section.get("hash") and section.get("embedding")
-    }
+        index_store.finish_rebuild(connection)
+        index_store.set_meta(connection, "version", 3)
+        index_store.set_meta(connection, "docs_dir", str(docs_dir))
+        index_store.set_meta(connection, "embedding_model", model)
+        index_store.set_meta(connection, "reused_sections", reused)
+        index_store.set_meta(connection, "computed_sections", computed)
+
+    return index_summary(config)
 
 
 def index_path(config: dict[str, Any]) -> Path:
     return resolve_path(config["paths"]["index_file"])
 
 
-def save_index(config: dict[str, Any], index: dict[str, Any]) -> None:
+def index_exists(config: dict[str, Any]) -> bool:
+    return index_store.exists(index_path(config))
+
+
+def index_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Короткая сводка об индексе для интерфейса."""
     path = index_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
-
-
-def load_index(config: dict[str, Any]) -> dict[str, Any] | None:
-    path = index_path(config)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-
-
-def index_summary(index: dict[str, Any] | None) -> dict[str, Any]:
-    if not index:
+    if not index_store.exists(path):
         return {"exists": False, "documents": [], "documents_count": 0, "sections_count": 0}
-    return {
-        "exists": True,
-        "docs_dir": index.get("docs_dir", ""),
-        "reused_sections": index.get("reused_sections", 0),
-        "computed_sections": index.get("computed_sections", len(index.get("sections", []))),
-        "embedding_model": index.get("embedding_model", ""),
-        "documents": index.get("documents", []),
-        "documents_count": len(index.get("documents", [])),
-        "sections_count": len(index.get("sections", [])),
-    }
+    with index_store.connect(path) as connection:
+        documents_count, sections_count = index_store.counts(connection)
+        return {
+            "exists": True,
+            "docs_dir": index_store.get_meta(connection, "docs_dir"),
+            "embedding_model": index_store.get_meta(connection, "embedding_model"),
+            "reused_sections": int(index_store.get_meta(connection, "reused_sections", "0")),
+            "computed_sections": int(index_store.get_meta(connection, "computed_sections", "0")),
+            "documents": index_store.documents(connection),
+            "documents_count": documents_count,
+            "sections_count": sections_count,
+        }

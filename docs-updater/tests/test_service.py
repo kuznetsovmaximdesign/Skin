@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend import config as config_module  # noqa: E402
+from backend import index_store  # noqa: E402
 from backend.diffing import build_diff, split_paragraphs  # noqa: E402
 from backend.generator import build_prompt, check_context_size, check_result  # noqa: E402
 from backend.ollama_client import clean_model_output  # noqa: E402
@@ -22,6 +23,15 @@ from backend.search import cosine, to_percent  # noqa: E402
 from tests.fake_ollama import FakeOllama  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def indexed_sections(client, doc_path: str) -> list[str]:
+    """Тексты секций документа прямо из локального индекса (SQLite)."""
+    with index_store.connect(client.tmp_path / "index.sqlite3") as connection:
+        rows = connection.execute(
+            "SELECT text FROM sections WHERE doc_path = ?", (doc_path,)
+        ).fetchall()
+    return [row[0] for row in rows]
 
 
 @pytest.fixture()
@@ -40,17 +50,19 @@ def client(tmp_path, monkeypatch, fake_ollama):
     config = {
         "ollama": {
             "host": fake_ollama.host,
-            "generation_model": "qwen3",
+            "generation_model": "qwen3:4b",
             "embedding_model": "bge-m3",
+            "keep_alive": "5m",
+            "sequential_models": True,
             "request_timeout": 30,
         },
         "paths": {
             "docs_dir": "docs",
             "style_guide": "styleguide.md",
-            "index_file": "index.json",
+            "index_file": "index.sqlite3",
             "output_dir": "output",
         },
-        "search": {"top_k": 5, "chunk_max_chars": 1800},
+        "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
         "generation": {"temperature": 0.2, "num_ctx": 8192},
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
@@ -98,7 +110,7 @@ def test_reindex_builds_local_index(client):
     data = client.post("/api/reindex").json()
     assert data["documents_count"] == 3
     assert data["sections_count"] > 5
-    assert (client.tmp_path / "index.json").exists()
+    assert (client.tmp_path / "index.sqlite3").exists()
 
 
 def test_reindex_reports_missing_model_with_pull_command(client):
@@ -295,8 +307,7 @@ def test_apply_refreshes_index(client):
     ).json()
 
     assert applied["index_updated"] is True
-    index = json_module.loads((client.tmp_path / "index.json").read_text(encoding="utf-8"))
-    texts = " ".join(section["text"] for section in index["sections"] if section["doc_path"] == "api-auth.md")
+    texts = " ".join(indexed_sections(client, "api-auth.md"))
     assert "120 минут" in texts
 
 
@@ -606,7 +617,7 @@ def test_results_carry_the_change_description(client):
     assert item["change_description"] == "Срок жизни токена — 120 минут."
     assert item["mode"] == "section"
     assert item["section"].endswith("Срок жизни токена")
-    assert item["model"] == "qwen3"
+    assert item["model"] == "qwen3:4b"
     assert "edited_at" not in item
 
 
@@ -717,7 +728,7 @@ def test_review_returns_notes(client):
         "«Токен действует 120 минут.» — по гайду версии пишем полностью",
         "«Не более 10 запросов» — уточните единицу времени",
     ]
-    assert data["model"] == "qwen3"
+    assert data["model"] == "qwen3:4b"
 
     prompt = client.ollama.requests[-1]["payload"]["prompt"]
     assert "ПРОВЕРКА ПО ГАЙДУ" in prompt
@@ -755,3 +766,93 @@ def test_search_candidates_expose_the_matching_section(client):
         section["path"] for section in client.get("/api/outline", params={"path": "api-auth.md"}).json()["sections"]
     ]
     assert candidates[0]["heading"] in outline_paths
+
+
+# --- работа на 18 ГБ: батчи, keep_alive, по одной модели за раз ------------
+
+
+def test_embeddings_are_sent_in_small_batches(client):
+    client.post("/api/config", json={})  # конфиг из фикстуры: embed_batch = 3
+    config_path = client.tmp_path / "config.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("embed_batch: 8", "embed_batch: 3"),
+        encoding="utf-8",
+    )
+
+    client.post("/api/reindex")
+    batches = [
+        len(request["payload"]["input"])
+        for request in client.ollama.requests
+        if request["path"] == "/api/embed"
+    ]
+    assert batches, "эмбеддинги должны считаться через /api/embed"
+    assert max(batches) <= 3, f"батчи оказались больше лимита: {batches}"
+    assert sum(batches) == client.get("/api/status").json()["index"]["sections_count"]
+
+
+def test_keep_alive_is_sent_with_every_request(client):
+    client.post("/api/reindex")
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+
+    embeds = [r for r in client.ollama.requests if r["path"] == "/api/embed"]
+    generations = [
+        r for r in client.ollama.requests if r["path"] == "/api/generate" and r["payload"].get("prompt")
+    ]
+    assert embeds and generations
+    assert all(request["payload"].get("keep_alive") == "5m" for request in embeds)
+    assert all(request["payload"].get("keep_alive") == "5m" for request in generations)
+
+
+def unload_requests(ollama) -> list[str]:
+    """Запросы «выгрузить модель»: пустой промпт и keep_alive = 0."""
+    return [
+        request["payload"]["model"]
+        for request in ollama.requests
+        if request["path"] == "/api/generate"
+        and request["payload"].get("keep_alive") == 0
+        and not request["payload"].get("prompt")
+    ]
+
+
+def test_models_are_not_kept_in_memory_together(client):
+    client.post("/api/reindex")
+    # перед индексацией из памяти выгружается модель генерации
+    assert unload_requests(client.ollama) == ["qwen3:4b"]
+
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    # перед генерацией — модель эмбеддингов
+    assert unload_requests(client.ollama)[-1] == "bge-m3"
+
+    client.post("/api/search", json={"query": "токен"})
+    # перед поиском снова освобождаем память от модели генерации
+    assert unload_requests(client.ollama)[-1] == "qwen3:4b"
+
+
+def test_sequential_models_can_be_switched_off(client):
+    config_path = client.tmp_path / "config.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("sequential_models: true", "sequential_models: false"),
+        encoding="utf-8",
+    )
+    client.post("/api/reindex")
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    assert unload_requests(client.ollama) == []
+
+
+def test_status_shows_memory_settings(client):
+    config = client.get("/api/status").json()["config"]
+    assert config["keep_alive"] == "5m"
+    assert config["sequential_models"] is True
+    assert config["generation_model"] == "qwen3:4b"
+
+
+def test_index_stores_vectors_in_sqlite(client):
+    client.post("/api/reindex")
+    with index_store.connect(client.tmp_path / "index.sqlite3") as connection:
+        row = connection.execute("SELECT embedding, text FROM sections LIMIT 1").fetchone()
+        tables = {
+            name for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert {"documents", "sections", "meta"} <= tables
+    assert isinstance(row[0], bytes)  # вектор лежит бинарно, а не текстом
+    assert len(index_store.unpack(row[0])) > 10

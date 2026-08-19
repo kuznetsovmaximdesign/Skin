@@ -3,27 +3,6 @@
 const $ = (id) => document.getElementById(id);
 const state = { doc: null, result: null };
 
-/* ---------- сеть (только к своему же бэкенду) ---------- */
-
-async function api(path, options = {}) {
-  const response = await fetch(path, options);
-  let data = null;
-  try { data = await response.json(); } catch (e) { data = null; }
-  if (!response.ok) {
-    const message = (data && (data.error || data.detail)) || `Ошибка ${response.status}`;
-    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message));
-    error.hint = data && data.hint;
-    throw error;
-  }
-  return data;
-}
-
-const json = (path, body) => api(path, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-});
-
 /* ---------- интерфейсные мелочи ---------- */
 
 let busyTimer = null;
@@ -74,7 +53,7 @@ function showError(error) {
 /* ---------- шаг 1: статус и настройки ---------- */
 
 async function loadStatus() {
-  const data = await api('/api/status');
+  const data = await Api.status();
   const cfg = data.config;
   $('docs-dir').value = cfg.docs_dir_raw;
   $('style-guide-path').value = cfg.style_guide_raw;
@@ -114,14 +93,14 @@ async function loadStatus() {
 }
 
 async function loadDocuments() {
-  const data = await api('/api/documents');
+  const data = await Api.documents();
   const select = $('manual-doc');
   select.innerHTML = '<option value="">— документ из папки —</option>' +
     data.documents.map((doc) => `<option value="${escapeHtml(doc.path)}">${escapeHtml(doc.title)} (${escapeHtml(doc.path)})</option>`).join('');
 }
 
 async function loadResults() {
-  const data = await api('/api/results');
+  const data = await Api.results();
   const box = $('results-list');
   if (!data.results.length) {
     box.innerHTML = '<p class="muted">Пока пусто. Обновлённые документы появятся здесь.</p>';
@@ -149,7 +128,7 @@ async function loadResults() {
 }
 
 async function loadGuide() {
-  const data = await api('/api/style-guide');
+  const data = await Api.styleGuide();
   $('guide-text').value = data.content || '';
   $('guide-info').textContent = data.exists
     ? `Гайд подключён: ${data.path}`
@@ -175,7 +154,7 @@ async function loadOutline(path, heading) {
   hint.textContent = '';
   select.innerHTML = '<option value="">весь документ целиком</option>';
   try {
-    const data = await api('/api/outline?path=' + encodeURIComponent(path));
+    const data = await Api.outline(path);
     select.innerHTML = '<option value="">весь документ целиком</option>' +
       data.sections.map((section) => {
         const indent = '— '.repeat(Math.max(0, section.level - 1));
@@ -372,7 +351,7 @@ function renderWarnings(warnings) {
 $('save-config').addEventListener('click', async () => {
   busy('Сохраняем настройки…');
   try {
-    await json('/api/config', {
+    await Api.saveConfig({
       docs_dir: $('docs-dir').value,
       style_guide: $('style-guide-path').value,
       generation_model: $('generation-model').value,
@@ -386,7 +365,7 @@ $('save-config').addEventListener('click', async () => {
 $('reindex').addEventListener('click', async () => {
   busy('Считаем эмбеддинги локально. На первой индексации это может занять пару минут…');
   try {
-    const index = await json('/api/reindex', {});
+    const index = await Api.reindex();
     await loadStatus();
     await loadDocuments();
     const reused = index.reused_sections
@@ -401,9 +380,7 @@ $('guide-file').addEventListener('change', async (event) => {
   if (!file) return;
   busy('Загружаем гайд…');
   try {
-    const form = new FormData();
-    form.append('file', file);
-    const data = await api('/api/style-guide/upload', { method: 'POST', body: form });
+    const data = await Api.uploadStyleGuide(file);
     $('guide-text').value = data.content;
     $('guide-info').textContent = `Гайд подключён: ${data.path}`;
     toast('Гайд загружен');
@@ -413,11 +390,7 @@ $('guide-file').addEventListener('change', async (event) => {
 $('save-guide').addEventListener('click', async () => {
   busy('Сохраняем гайд…');
   try {
-    await api('/api/style-guide', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: $('guide-text').value }),
-    });
+    await Api.saveStyleGuide($('guide-text').value);
     await loadGuide();
     toast('Гайд сохранён');
   } catch (error) { showError(error); } finally { idle(); }
@@ -428,7 +401,7 @@ $('find-doc').addEventListener('click', async () => {
   if (!query) { toast('Опишите, что изменилось', true); return; }
   busy('Ищем подходящий документ…');
   try {
-    const data = await json('/api/search', { query });
+    const data = await Api.search(query);
     renderCandidates(data.candidates);
   } catch (error) { showError(error); } finally { idle(); }
 });
@@ -468,24 +441,7 @@ function finishResult(data) {
 
 /* Потоковая генерация: текст появляется по мере того, как модель его пишет. */
 async function generateStreaming(body) {
-  const response = await fetch('/api/generate/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    let data = null;
-    try { data = await response.json(); } catch (e) { data = null; }
-    const error = new Error((data && (data.error || data.detail)) || `Ошибка ${response.status}`);
-    error.hint = data && data.hint;
-    throw error;
-  }
-  if (!response.body || !response.body.getReader) return false; // старый браузер — вернёмся к обычному запросу
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   const startedAt = Date.now();
-  let buffer = '';
   let text = '';
   let finished = null;
 
@@ -495,7 +451,7 @@ async function generateStreaming(body) {
     $('marks-info').textContent = `модель пишет… ${clock}, символов: ${text.length}`;
   };
 
-  const handle = (event) => {
+  const streamed = await Api.generateStream(body, (event) => {
     if (event.type === 'start') {
       $('step-diff').hidden = false;
       $('result-view').value = '';
@@ -519,20 +475,9 @@ async function generateStreaming(body) {
     } else if (event.type === 'done') {
       finished = event;
     }
-  };
+  });
 
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop();
-    for (const line of lines) {
-      if (line.trim()) handle(JSON.parse(line));
-    }
-  }
-  if (buffer.trim()) handle(JSON.parse(buffer));
-
+  if (!streamed) return false; // браузер не умеет потоки — вызывающий сходит обычным запросом
   if (!finished) throw new Error('Поток оборвался, результат не получен. Повторите запрос.');
   finishResult(finished);
   await loadResults();
@@ -555,7 +500,7 @@ $('generate').addEventListener('click', async () => {
   try {
     const streamed = await generateStreaming(body);
     if (!streamed) {
-      const data = await json('/api/generate', body);
+      const data = await Api.generate(body);
       finishResult(data);
       await loadResults();
     }
@@ -586,11 +531,9 @@ $('save-edits').addEventListener('click', async () => {
   if (!state.result) return;
   busy('Сохраняем правки и пересчитываем различия…');
   try {
-    const data = await json('/api/results/save', {
-      doc_path: state.result.doc_path,
-      result_file: state.result.result_file,
-      content: $('result-view').value,
-    });
+    const data = await Api.saveResult(
+      state.result.doc_path, state.result.result_file, $('result-view').value
+    );
     state.result = { ...state.result, updated: data.updated, diff: data.diff };
     renderDiff(data.diff);
     renderPreview(data.diff);
@@ -616,7 +559,7 @@ $('review').addEventListener('click', async () => {
   if (!state.result) return;
   busy('Модель сверяет текст с гайдом…');
   try {
-    const data = await json('/api/review', { content: $('result-view').value || state.result.updated });
+    const data = await Api.review($('result-view').value || state.result.updated);
     renderReview(data.notes);
     toast(data.notes.length ? `Замечаний по гайду: ${data.notes.length}` : 'Нарушений гайда не найдено');
   } catch (error) { showError(error); } finally { idle(); }
@@ -624,7 +567,7 @@ $('review').addEventListener('click', async () => {
 
 $('download').addEventListener('click', () => {
   if (!state.result) return;
-  window.location.href = '/api/download?file=' + encodeURIComponent(state.result.result_file);
+  window.location.href = Api.downloadUrl(state.result.result_file);
 });
 
 $('apply').addEventListener('click', async () => {
@@ -633,10 +576,7 @@ $('apply').addEventListener('click', async () => {
   if (!ok) return;
   busy('Записываем в оригинал…');
   try {
-    const data = await json('/api/apply', {
-      doc_path: state.result.doc_path,
-      result_path: state.result.result_file,
-    });
+    const data = await Api.apply(state.result.doc_path, state.result.result_file);
     await loadStatus();
     toast(
       `Оригинал обновлён. Резервная копия: ${data.backup}.` +

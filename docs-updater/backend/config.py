@@ -16,18 +16,20 @@ CONFIG_PATH = Path(os.environ.get("DOCS_UPDATER_CONFIG") or PROJECT_ROOT / "conf
 DEFAULTS: dict[str, Any] = {
     "ollama": {
         "host": "http://localhost:11434",
-        "generation_model": "qwen3",
+        "generation_model": "qwen3:4b",
         "embedding_model": "bge-m3",
+        "keep_alive": "5m",
+        "sequential_models": True,
         "request_timeout": 900,
     },
     "paths": {
         "docs_dir": "data/docs",
         "style_guide": "data/styleguide.md",
-        "index_file": "data/index.json",
+        "index_file": "data/index.sqlite3",
         "output_dir": "data/output",
     },
-    "search": {"top_k": 5, "chunk_max_chars": 1800},
-    "generation": {"temperature": 0.2, "num_ctx": 16384},
+    "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
+    "generation": {"temperature": 0.2, "num_ctx": 8192},
 }
 
 

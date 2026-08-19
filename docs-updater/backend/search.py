@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
+from . import index_store
 from .ollama_client import OllamaClient
 
 
@@ -25,43 +27,48 @@ def to_percent(score: float) -> int:
 
 
 def search_documents(
-    index: dict[str, Any],
+    index_file: Path,
     client: OllamaClient,
     query: str,
     top_k: int = 5,
 ) -> list[dict[str, Any]]:
-    sections = index.get("sections", [])
-    if not sections:
+    """Семантический поиск по индексу.
+
+    Векторы читаются курсором по одной строке, тексты секций подтягиваются только
+    для документов-победителей — в памяти всё время лежит несколько сотен килобайт.
+    """
+    if not index_store.exists(index_file):
         return []
-    model = index.get("embedding_model") or ""
-    query_vector = client.embed(model, [query])[0]
 
-    best: dict[str, dict[str, Any]] = {}
-    for section in sections:
-        score = cosine(query_vector, section.get("embedding", []))
-        path = section["doc_path"]
-        current = best.get(path)
-        if current is None or score > current["score"]:
-            best[path] = {
-                "path": path,
-                "title": section.get("doc_title", path),
-                "score": score,
-                "heading": section.get("heading", ""),
-                "snippet": snippet(section.get("text", "")),
+    with index_store.connect(index_file) as connection:
+        model = index_store.get_meta(connection, "embedding_model")
+        query_vector = client.embed(model, [query])[0]
+
+        best: dict[str, dict[str, Any]] = {}
+        for section_id, doc_path, doc_title, heading, vector in index_store.iter_embeddings(connection):
+            score = cosine(query_vector, vector)
+            current = best.get(doc_path)
+            if current is None or score > current["score"]:
+                best[doc_path] = {
+                    "id": section_id,
+                    "path": doc_path,
+                    "title": doc_title or doc_path,
+                    "heading": heading or "",
+                    "score": score,
+                }
+
+        ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[:top_k]
+        return [
+            {
+                "path": item["path"],
+                "title": item["title"],
+                "heading": item["heading"],
+                "snippet": snippet(index_store.section_text(connection, item["id"])),
+                "relevance": to_percent(item["score"]),
+                "score": round(item["score"], 4),
             }
-
-    ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[:top_k]
-    return [
-        {
-            "path": item["path"],
-            "title": item["title"],
-            "heading": item["heading"],
-            "snippet": item["snippet"],
-            "relevance": to_percent(item["score"]),
-            "score": round(item["score"], 4),
-        }
-        for item in ranked
-    ]
+            for item in ranked
+        ]
 
 
 def snippet(text: str, limit: int = 220) -> str:

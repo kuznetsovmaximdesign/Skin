@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+data/index.sqlite3
 data/index.json
 data/output/*
 !data/output/.gitkeep

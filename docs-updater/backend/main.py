@@ -35,7 +35,22 @@ def get_client(config: dict[str, Any]) -> OllamaClient:
     return OllamaClient(
         host=config["ollama"]["host"],
         timeout=float(config["ollama"]["request_timeout"]),
+        keep_alive=str(config["ollama"].get("keep_alive", "5m")),
     )
+
+
+def free_memory_for(config: dict[str, Any], client: OllamaClient, wanted: str) -> None:
+    """Выгружает «другую» модель, чтобы генерация и эмбеддинги не занимали память разом.
+
+    На 18 ГБ единой памяти это разница между «работает» и «всё тормозит».
+    """
+    if not config["ollama"].get("sequential_models", True):
+        return
+    generation = config["ollama"]["generation_model"]
+    embedding = config["ollama"]["embedding_model"]
+    keep, drop = (generation, embedding) if wanted == "generation" else (embedding, generation)
+    if drop and drop != keep:
+        client.unload(drop)
 
 
 def safe_join(base: Path, relative: str) -> Path:
@@ -142,8 +157,6 @@ def status() -> dict[str, Any]:
     config = load_config()
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     guide_path = resolve_path(config["paths"]["style_guide"])
-    index = indexer.load_index(config)
-
     ollama: dict[str, Any] = {"host": config["ollama"]["host"]}
     try:
         installed = get_client(config).list_models()
@@ -168,10 +181,12 @@ def status() -> dict[str, Any]:
             "style_guide_exists": guide_path.exists(),
             "generation_model": config["ollama"]["generation_model"],
             "embedding_model": config["ollama"]["embedding_model"],
+            "keep_alive": config["ollama"].get("keep_alive", "5m"),
+            "sequential_models": bool(config["ollama"].get("sequential_models", True)),
             "top_k": config["search"]["top_k"],
         },
         "markdown_files": len(indexer.find_markdown_files(docs_dir)),
-        "index": indexer.index_summary(index),
+        "index": indexer.index_summary(config),
         "ollama": ollama,
     }
 
@@ -233,8 +248,9 @@ def reindex() -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Папка документации не найдена: {docs_dir}")
     if not indexer.find_markdown_files(docs_dir):
         raise HTTPException(status_code=400, detail=f"В папке {docs_dir} нет файлов .md")
-    index = indexer.build_index(config, get_client(config))
-    return indexer.index_summary(index)
+    client = get_client(config)
+    free_memory_for(config, client, "embedding")
+    return indexer.build_index(config, client)
 
 
 @app.get("/api/documents")
@@ -291,11 +307,12 @@ def document_outline(path: str) -> dict[str, Any]:
 @app.post("/api/search")
 def search_endpoint(payload: SearchRequest) -> dict[str, Any]:
     config = load_config()
-    index = indexer.load_index(config)
-    if not index or not index.get("sections"):
+    if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
     top_k = payload.top_k or int(config["search"]["top_k"])
-    candidates = search.search_documents(index, get_client(config), payload.query, top_k)
+    client = get_client(config)
+    free_memory_for(config, client, "embedding")
+    candidates = search.search_documents(indexer.index_path(config), client, payload.query, top_k)
     return {"candidates": candidates}
 
 
@@ -371,9 +388,11 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
     original, style_guide = context["original"], context["style_guide"]
     span, section_payload = context["span"], context["section"]
 
+    client = get_client(config)
+    free_memory_for(config, client, "generation")
     result = generate_update(
         config=config,
-        client=get_client(config),
+        client=client,
         document=original,
         change_description=payload.change_description,
         style_guide=style_guide,
@@ -423,6 +442,7 @@ def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
     span, section_payload = context["span"], context["section"]
 
     client = get_client(config)
+    free_memory_for(config, client, "generation")
     plan = prepare_generation(
         config, original, payload.change_description, style_guide, payload.doc_path, section_payload
     )
@@ -501,7 +521,9 @@ def review_endpoint(payload: ReviewRequest) -> dict[str, Any]:
             status_code=400,
             detail="Гайд по стилю пуст — проверять не по чему. Загрузите гайд в шаге 2.",
         )
-    result = review_document(config, get_client(config), payload.content, style_guide)
+    client = get_client(config)
+    free_memory_for(config, client, "generation")
+    result = review_document(config, client, payload.content, style_guide)
     return {"notes": result["notes"], "raw": result["raw"], "model": result["model"]}
 
 
@@ -588,9 +610,11 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
 
     # Индекс устарел: пересобираем его (пересчитаются только изменившиеся секции).
     index_updated = False
-    if indexer.load_index(config):
+    if indexer.index_exists(config):
         try:
-            indexer.build_index(config, get_client(config))
+            client = get_client(config)
+            free_memory_for(config, client, "embedding")
+            indexer.build_index(config, client)
             index_updated = True
         except OllamaError:
             index_updated = False

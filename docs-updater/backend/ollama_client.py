@@ -29,9 +29,11 @@ class OllamaError(Exception):
 
 
 class OllamaClient:
-    def __init__(self, host: str, timeout: float = 900.0) -> None:
+    def __init__(self, host: str, timeout: float = 900.0, keep_alive: str = "5m") -> None:
         self.host = host.rstrip("/")
         self.timeout = timeout
+        # Насколько Ollama держит модель в памяти после запроса. На 16 ГБ важно не держать долго.
+        self.keep_alive = keep_alive
 
     # --- служебное ---------------------------------------------------------
 
@@ -97,12 +99,30 @@ class OllamaClient:
         if not self.has_model(model):
             raise self._model_missing(model)
 
+    def unload(self, model: str) -> bool:
+        """Просит Ollama выгрузить модель из памяти (пустой запрос с keep_alive: 0).
+
+        Нужно, чтобы модель эмбеддингов и модель генерации не занимали память одновременно.
+        Не критично: если не получилось — просто продолжаем работать.
+        """
+        try:
+            httpx.post(
+                f"{self.host}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": 0},
+                timeout=15.0,
+            )
+            return True
+        except httpx.HTTPError:
+            return False
+
     def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         """Эмбеддинги пачкой. Сначала новый /api/embed, при отказе — старый /api/embeddings."""
         if not texts:
             return []
         try:
-            data = self._post("/api/embed", {"model": model, "input": texts}, model)
+            data = self._post(
+                "/api/embed", {"model": model, "input": texts, "keep_alive": self.keep_alive}, model
+            )
             vectors = data.get("embeddings")
             if vectors:
                 return vectors
@@ -112,7 +132,9 @@ class OllamaClient:
                 raise
         vectors = []
         for text in texts:
-            data = self._post("/api/embeddings", {"model": model, "prompt": text}, model)
+            data = self._post(
+                "/api/embeddings", {"model": model, "prompt": text, "keep_alive": self.keep_alive}, model
+            )
             vectors.append(data.get("embedding", []))
         return vectors
 
@@ -129,6 +151,7 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
             "think": False,  # отключаем «рассуждения» у qwen3 и подобных
+            "keep_alive": self.keep_alive,
             "options": {"temperature": temperature, "num_ctx": num_ctx},
         }
         if system:
@@ -158,6 +181,7 @@ class OllamaClient:
             "prompt": prompt,
             "stream": True,
             "think": False,
+            "keep_alive": self.keep_alive,
             "options": {"temperature": temperature, "num_ctx": num_ctx},
         }
         if system:
