@@ -44,6 +44,10 @@ const Api = (() => {
     saveConfig: (patch) => post('/api/config', patch),
 
     documents: () => request('/api/documents'),
+    document: (path) => request('/api/document?path=' + encodeURIComponent(path)),
+    check: (content) => post('/api/check', { content }),
+    audit: (limit) => request('/api/audit?limit=' + (limit || 100)),
+    styleGuidePath: () => request('/api/style-guide'),
     outline: (path) => request('/api/outline?path=' + encodeURIComponent(path)),
 
     styleGuide: () => request('/api/style-guide'),

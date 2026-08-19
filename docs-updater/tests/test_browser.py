@@ -38,22 +38,6 @@ def find_chromium() -> str | None:
     return shutil.which("chromium") or shutil.which("google-chrome")
 
 
-def generate_and_wait(page, timeout: int = 120000) -> None:
-    """Запускает генерацию и ждёт именно её конца: новый файл результата и активные кнопки."""
-    previous = page.inner_text("#result-file")
-    page.click("#generate")
-    page.wait_for_function(
-        """(previous) => {
-            const file = document.querySelector('#result-file').textContent;
-            const stats = document.querySelector('#diff-stats').textContent;
-            return file && file !== previous && stats.includes('Изменено')
-                && !document.querySelector('#download').disabled;
-        }""",
-        arg=previous,
-        timeout=timeout,
-    )
-
-
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -134,6 +118,7 @@ security:
 
 
 def test_full_flow_in_browser(live_server):
+    """Весь путь писателя мышкой: индекс → анализ → правка потоком → сравнение → замена оригинала."""
     from playwright.sync_api import sync_playwright
 
     errors: list[str] = []
@@ -142,9 +127,8 @@ def test_full_flow_in_browser(live_server):
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=live_server["chromium"], args=["--no-sandbox"])
-        page = browser.new_page(viewport={"width": 1280, "height": 1000})
-        # Настоящие ошибки страницы ловит pageerror. В консоли браузер отмечает и коды ответа
-        # (например, наш намеренный отказ импорта с 400) — это не ошибка интерфейса.
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        # Настоящие ошибки страницы ловит pageerror; коды ответа в консоли — не ошибка интерфейса.
         page.on(
             "console",
             lambda message: errors.append(message.text)
@@ -160,196 +144,124 @@ def test_full_flow_in_browser(live_server):
         )
 
         page.goto(live_server["url"], wait_until="networkidle")
-        assert "Ollama на связи" in page.inner_text("#ollama-status")
-
-        # Шаг 1: индексация
-        page.click("#reindex")
-        page.wait_for_selector("#overlay", state="hidden", timeout=60000)
-        assert "3 док." in page.inner_text("#index-info")
-
-        # Шаг 3: поиск документа
-        page.fill("#change-text", "Срок жизни токена доступа увеличен с 60 до 120 минут")
-        page.click("#find-doc")
-        page.wait_for_selector(".candidate", timeout=60000)
-        candidates = page.eval_on_selector_all(".candidate", "els => els.map(e => e.dataset.path)")
-        assert candidates[0] == "api-auth.md"
-        assert "api-auth.md" in page.inner_text("#chosen-doc")
-
-        # обучение формату по образцу: один раз — и дальше применяется само
-        sample = live_server["work"] / "sample-doc.md"
-        sample.write_text(
-            "# Настройка вебхуков\n\n## Назначение\n\nДокумент описывает подключение вебхуков.\n\n"
-            "## Ограничения\n\n- Не более 5 вебхуков на проект.\n",
-            encoding="utf-8",
-        )
-        page.set_input_files("#sample-files", str(sample))
+        page.wait_for_selector("[data-testid='ollama-status']", timeout=30000)
+        # Статус подтягивается запросом: ждём именно его, а не первый кадр отрисовки.
         page.wait_for_function(
-            "() => document.querySelectorAll('#samples-list [data-sample]').length === 1", timeout=30000
+            "() => document.querySelector(\"[data-testid='ollama-status']\").innerText.includes('Ollama на связи')",
+            timeout=30000,
         )
-        page.uncheck("#learn-with-model")
-        page.click("#learn-format")
-        page.wait_for_selector(".format-status--ok", timeout=60000)
-        assert "Формат изучен по образцам" in page.inner_text("#format-status")
-        assert "Применяется при каждой правке" in page.inner_text("#format-status")
 
-        # импорт по ссылке выключен: страница честно об этом сообщает
-        page.fill("#import-url", "https://help.example.com/article")
-        page.click("#import-preview")
-        page.wait_for_selector("#warnings .warning--error", timeout=30000)
-        assert "выключен" in page.inner_text("#warnings")
+        # Интерфейс собран на дизайн-системе, а не на своей вёрстке.
+        assert page.evaluate("() => typeof window.KasperskyHexaUi") == "object"
 
-        # поиск подставил найденный раздел — писателю не нужно искать его вручную
+        # Шаг 1: индексация с экрана настроек
+        page.click("[data-testid='nav-settings']")
+        page.click("button:has-text('Прочитать документы')")
         page.wait_for_function(
-            "() => document.querySelector('#section-hint').textContent.length > 0", timeout=30000
+            "() => document.querySelector(\"[data-testid='index-status']\").innerText.includes('Документы прочитаны')",
+            timeout=90000,
         )
-        assert "подставлен поиском" in page.inner_text("#section-hint")
-        assert page.eval_on_selector("#section-select option:checked", "e => e.textContent").strip() == (
-            "— Срок жизни токена"
-        )
-        page.select_option("#section-select", index=0)  # дальше правим документ целиком
+        assert "3 документа" in page.inner_text("[data-testid='index-info']")
 
-        # список разделов документа подтянулся
-        page.wait_for_function("() => !document.querySelector('#section-select').disabled", timeout=30000)
-        options = page.eval_on_selector_all("#section-select option", "els => els.map(e => e.textContent.trim())")
-        assert options[0] == "весь документ целиком"
-        assert any("Срок жизни токена" in option for option in options)
+        # Шаг 2: описание изменения и анализ
+        page.click("[data-testid='nav-changed']")
+        page.fill("textarea", "Срок жизни токена доступа увеличен с 60 до 120 минут")
+        # Кнопка включается только когда описание дошло до состояния экрана.
+        page.wait_for_selector("button:has-text('Найти документы'):not([disabled])", timeout=15000)
+        page.click("button:has-text('Найти документы')")
+        page.wait_for_selector("button:has-text('Обновить документ')", timeout=90000)
+        assert "Что править" in page.inner_text("#root")
 
-        # Шаг 4-5: обновление. Текст появляется потоком, ещё до готового diff
-        previous_file = page.inner_text("#result-file")
-        page.click("#generate")
-        page.wait_for_function(
-            "() => document.querySelector('#result-view').value.length > 0", timeout=60000
-        )
-        assert "модель пишет" in page.inner_text("#marks-info")
-        page.wait_for_function(
-            "(previous) => document.querySelector('#result-file').textContent !== previous"
-            " && !document.querySelector('#download').disabled",
-            arg=previous_file,
-            timeout=120000,
-        )
-        assert page.eval_on_selector_all("ins", "e => e.length") >= 1
-        assert page.eval_on_selector_all("del", "e => e.length") >= 1
-        assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
+        # Шаг 3: выбор документа и потоковая правка
+        page.click("button:has-text('Обновить документ')")
+        page.wait_for_selector("text=Что править", timeout=30000)
+        page.click("button:has-text('Переписать текст')")
+        page.wait_for_selector("text=Проверка:", timeout=120000)
 
-        # режим «только изменения» прячет неизменённые абзацы
-        visible_before = page.eval_on_selector_all(".diff__equal", "els => els.filter(e => e.offsetParent).length")
-        page.check("#only-changes")
-        visible_after = page.eval_on_selector_all(".diff__equal", "els => els.filter(e => e.offsetParent).length")
-        assert visible_before > 0 and visible_after == 0
+        # Шаг 4: результат — три способа посмотреть одно и то же
+        page.click("button:has-text('Открыть результат')")
+        page.wait_for_selector("text=Оригинал не тронут", timeout=30000)
+        result_text = page.inner_text("#root")
+        assert "добавлено" in result_text and "изменено" in result_text
+        page.click("div[role='tab']:has-text('Предпросмотр')")
+        page.wait_for_selector("text=Зелёным — то, что добавилось", timeout=15000)
+        page.click("div[role='tab']:has-text('Готовый текст')")
+        page.wait_for_selector("text=Меняется файл с правкой", timeout=15000)
 
-        # вкладка с готовым документом: текст можно править прямо на странице
-        page.click(".tab[data-view='result']")
-        assert page.input_value("#result-view").startswith("# Авторизация в API")
-        page.fill("#result-view", page.input_value("#result-view") + "\n\nДописано вручную.\n")
-        page.click("#save-edits")
-        page.wait_for_selector("#overlay", state="hidden", timeout=60000)
-        page.click(".tab[data-view='diff']")
-        assert "Добавлено: 1" in page.inner_text("#diff-stats")
+        # Оставшиеся нарушения видны без дополнительных действий
+        assert "Проверка по правилам" in page.inner_text("#root")
 
-        # правка одного раздела: выбираем раздел и обновляем только его
-        page.select_option("#section-select", label="— Срок жизни токена")
-        generate_and_wait(page)
-        assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
-
-        # превью: документ в читаемом виде, новое подсвечено
-        page.click(".tab[data-view='preview']")
-        preview = page.inner_text("#preview-view")
-        assert "Авторизация в API" in preview
-        assert "#" not in preview  # разметка отрисована, а не показана как текст
-        assert page.eval_on_selector_all("#preview-view h2", "els => els.length") >= 4
-        highlighted = page.eval_on_selector_all("#preview-view ins", "els => els.map(e => e.textContent)")
-        assert any("120" in text for text in highlighted)
-
-        # удалённые куски показываются только по галочке
-        live_server["ollama"].generate_response = (
-            "# Авторизация в API\n\n## Назначение\n\n"
-            "Документ описывает, как получить токен доступа и использовать его в запросах к публичному API."
-        )
-        page.select_option("#section-select", index=0)
-        generate_and_wait(page)
-        page.click(".tab[data-view='preview']")
-        assert page.eval_on_selector_all(".preview__removed", "els => els.length") == 0
-        page.check("#show-removed")
-        assert page.eval_on_selector_all(".preview__removed", "els => els.length") > 0
-        page.uncheck("#show-removed")
-
-        # автопроверка оформления показана вместе с результатом
-        assert not page.is_hidden("#checks-notes")
-        assert "Автопроверка" in page.inner_text("#checks-notes")
-
-        # проверка готового текста по гайду
-        page.click("#review")
-        page.wait_for_selector("#review-notes:not([hidden])", timeout=60000)
-        assert "Замечания по гайду" in page.inner_text("#review-notes")
-        assert page.eval_on_selector_all("#review-notes li", "els => els.length") == 2
-
-        # правки по разделам: обоснование, поштучное принятие, сборка
-        live_server["ollama"].generate_response = (
-            "## Срок жизни токена\n\nТокен действует 120 минут.\n\n"
-            "ОБОСНОВАНИЕ: срок жизни токена увеличен до 120 минут\nПРЕДПОЛОЖЕНИЕ: нет"
-        )
-        page.fill("#change-text", "Срок жизни токена увеличен до 120 минут")
-        page.select_option("#section-select", label="— Срок жизни токена")
-        page.click("#propose")
-        page.wait_for_selector(".edit", timeout=120000)
-        assert "Основание" in page.inner_text(".edit__reason")
-        assert "уверенность" in page.inner_text(".edit__head")
-
-        page.click(".edit [data-accept]")
-        page.wait_for_selector(".edit--accepted", timeout=30000)
-
-        previous_file = page.inner_text("#result-file")
-        page.click("#build-changeset")
-        page.wait_for_function(
-            "(previous) => document.querySelector('#result-file').textContent !== previous",
-            arg=previous_file,
-            timeout=60000,
-        )
-        assert "120 минут" in page.input_value("#result-view")
-
-        # панель правил портала: типы, профили, KDOC и глоссарий
-        assert "Типы статей" in page.inner_text("#portal-rules-body")
-        assert page.eval_on_selector_all("#portal-rules-body .rules__item", "els => els.length") > 10
-        page.click("#sync-glossary")
-        page.wait_for_selector("#overlay", state="hidden", timeout=60000)
-
-        # новая статья по шаблону
-        page.fill("#article-title", "Настройка уведомлений")
-        page.fill("#article-requirements", "Уведомления отправляются на почту администратора.")
-        previous_file = page.inner_text("#result-file")
-        page.click("#create-article")
-        page.wait_for_function(
-            "(previous) => document.querySelector('#result-file').textContent !== previous",
-            arg=previous_file,
-            timeout=120000,
-        )
-        assert "Настройка уведомлений" in page.input_value("#result-view")
-
-        # каскад на языковые версии
-        page.click("#cascade")
-        page.wait_for_selector(".cascade__row", timeout=120000)
-        languages_shown = page.eval_on_selector_all(".cascade__lang", "els => els.map(e => e.textContent.trim())")
-        assert {item.lower() for item in languages_shown} == {"en", "kk"}
-        assert "вычитка" in page.inner_text("#cascade-list")
-
-        # публикация: без настроек площадок ничего не уходит
-        page.click("#publish")
-        page.wait_for_selector("#publish-box:not([hidden])", timeout=60000)
-        assert "выключена" in page.inner_text("#publish-box")
-
-        # сохранённые результаты видны на странице (список обновляется после генерации)
-        page.wait_for_function(
-            "() => document.querySelectorAll('.result-row').length >= 5", timeout=30000
-        )
-        rows = page.inner_text("#results-list")
-        assert "api-auth.md" in rows
-        assert "Срок жизни токена доступа увеличен" in rows
+        # Шаг 5: замена оригинала — только через подтверждение
+        page.click("button:has-text('Перезаписать оригинал')")
+        page.wait_for_selector("text=Перезаписать оригинал?", timeout=15000)
+        # Модальное окно рисуется порталом вне #root — читаем всю страницу.
+        assert "резервную копию" in page.inner_text("body")
+        page.click(".ant-modal button:has-text('Перезаписать оригинал')")
+        page.wait_for_selector("text=Оригинал перезаписан", timeout=90000)
+        backups = list((live_server["work"] / "docs").glob("*.bak-*"))
+        assert backups, "перед заменой оригинала не создана резервная копия"
 
         browser.close()
 
-    assert errors == [], f"Ошибки JS на странице: {errors}"
-    assert external == [], f"Страница обратилась наружу: {external}"
+    assert not errors, f"ошибки в браузере: {errors[:3]}"
+    assert not external, f"страница обратилась наружу: {external[:3]}"
 
-    original = (live_server["work"] / "docs" / "api-auth.md").read_text(encoding="utf-8")
-    assert "Токен действует 60 минут." in original, "Оригинал не должен меняться"
-    assert list((live_server["work"] / "output").glob("*.md")), "Результат должен сохраниться отдельным файлом"
+
+def test_changeset_flow_in_browser(live_server):
+    """Набор отдельных правок: решение по каждой и сборка документа из принятых."""
+    from playwright.sync_api import sync_playwright
+
+    errors: list[str] = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=live_server["chromium"], args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.on("pageerror", lambda error: errors.append(str(error)))
+
+        page.goto(live_server["url"], wait_until="networkidle")
+        page.click("[data-testid='nav-settings']")
+        page.click("button:has-text('Прочитать документы')")
+        page.wait_for_function(
+            "() => document.querySelector(\"[data-testid='index-status']\").innerText.includes('Документы прочитаны')",
+            timeout=90000,
+        )
+
+        page.click("[data-testid='nav-changed']")
+        page.fill("textarea", "Срок жизни токена доступа увеличен с 60 до 120 минут")
+        # Кнопка включается только когда описание дошло до состояния экрана.
+        page.wait_for_selector("button:has-text('Найти документы'):not([disabled])", timeout=15000)
+        page.click("button:has-text('Найти документы')")
+        page.wait_for_selector("button:has-text('Обновить документ')", timeout=90000)
+        page.click("button:has-text('Обновить документ')")
+
+        page.click("button:has-text('Разобрать по одной')")
+        page.click("button:has-text('Показать правки')")
+        page.wait_for_selector("text=Предложено:", timeout=120000)
+
+        # У каждой правки видно основание и решение
+        body = page.inner_text("#root")
+        assert "Взято из вашего описания" in body or "не смогла показать" in body
+        page.click("button:has-text('Принять') >> nth=0")
+        page.wait_for_selector("text=принята", timeout=30000)
+
+        page.click("button:has-text('Собрать документ из принятых правок')")
+        page.wait_for_selector("text=Оригинал не тронут", timeout=90000)
+        assert "Что поменялось в тексте" in page.inner_text("#root")
+
+        browser.close()
+
+    assert not errors, f"ошибки в браузере: {errors[:3]}"
+
+
+def test_page_without_design_system_explains_what_to_do(live_server):
+    """Если файлов дизайн-системы нет, страница объясняет, что положить и куда."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=live_server["chromium"], args=["--no-sandbox"])
+        page = browser.new_page()
+        # Подменяем бандл пустым ответом: имитируем клон репозитория без vendor/hexa.
+        page.route("**/vendor/hexa/_ds_bundle.js", lambda route: route.fulfill(status=404, body=""))
+        page.goto(live_server["url"], wait_until="networkidle")
+        page.wait_for_selector("text=Не найдена дизайн-система HEXA", timeout=15000)
+        assert "vendor/hexa" in page.inner_text("#no-ds")
+        browser.close()

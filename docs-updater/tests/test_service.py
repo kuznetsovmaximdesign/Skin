@@ -234,7 +234,7 @@ def test_reindex_drops_deleted_documents(client):
 def test_search_requires_index(client):
     response = client.post("/api/search", json={"query": "токен"})
     assert response.status_code == 400
-    assert "Переиндексировать" in response.json()["detail"]
+    assert "Прочитать документы" in response.json()["detail"]
 
 
 def test_search_finds_the_right_document(client):
@@ -823,7 +823,7 @@ def test_review_without_style_guide(client):
     client.put("/api/style-guide", json={"content": "   "})
     response = client.post("/api/review", json={"content": "# Док\n\nТекст."})
     assert response.status_code == 400
-    assert "Гайд по стилю пуст" in response.json()["detail"]
+    assert "Правила оформления пустые" in response.json()["detail"]
 
 
 def test_review_reports_missing_model(client):
@@ -1379,7 +1379,7 @@ def test_summaries_survive_reindex_when_document_is_unchanged(client):
 def test_map_requires_index(client):
     response = client.post("/api/map/build")
     assert response.status_code == 400
-    assert "Индекс пуст" in response.json()["detail"]
+    assert "не прочитаны" in response.json()["detail"]
 
 
 def test_golden_cases_pass(tmp_path):

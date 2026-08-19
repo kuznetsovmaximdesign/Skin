@@ -2,3 +2,7 @@ node_modules/
 .env
 data.json
 *.log
+
+# Дизайн-система HEXA: внутренние файлы, в репозиторий не выкладываются.
+# Ставятся локально: python3 install_ui.py путь/до/выгрузки.zip
+docs-updater/frontend/vendor/hexa/

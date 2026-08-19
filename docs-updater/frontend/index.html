@@ -3,256 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Обновление документации — локальный сервис</title>
+  <title>Обновление документации</title>
   <link rel="icon" href="data:,">
+  <!-- Дизайн-система HEXA. Файлы лежат локально: интернет не используется. -->
+  <link rel="stylesheet" href="vendor/hexa/styles.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="topbar__title">
-    <h1>Обновление документации</h1>
-    <p>Всё считается локально: документы и модель не покидают ваш компьютер.</p>
-  </div>
-  <div class="topbar__right">
-    <label class="topbar__product">Продукт
-      <select id="product-select"></select>
-    </label>
-    <div id="ollama-status" class="status status--wait">Проверяем Ollama…</div>
-  </div>
-</header>
+<div id="root"></div>
+<div id="no-ds" class="no-ds">
+  <h1>Не найдена дизайн-система HEXA</h1>
+  <p>Интерфейс собран на компонентах HEXA, а её файлы в репозиторий не выкладываются.
+     Положите их в папку <code>frontend/vendor/hexa/</code>:</p>
+  <pre>frontend/vendor/hexa/_ds_bundle.js
+frontend/vendor/hexa/_ds_bundle.css
+frontend/vendor/hexa/styles.css
+frontend/vendor/hexa/fonts/fonts.css</pre>
+  <p>Взять их можно из выгрузки дизайн-системы: папка
+     <code>_ds/kaspersky-hexa-ui-…/</code>. Проще всего — командой из папки сервиса:</p>
+  <pre>python3 install_ui.py путь/до/выгрузки.zip</pre>
+  <p>Сам сервис при этом работает: <a href="/docs">описание API</a> доступно всегда.</p>
+</div>
 
-<main>
-  <!-- Шаг 1 -->
-  <section class="card" id="step-settings">
-    <div class="card__head">
-      <span class="step">1</span>
-      <h2>Папка с документацией и модели</h2>
-    </div>
-    <div class="grid">
-      <label>Папка с документами (.md)
-        <input type="text" id="docs-dir" placeholder="data/docs">
-      </label>
-      <label>Файл гайда по стилю (.md)
-        <input type="text" id="style-guide-path" placeholder="data/styleguide.md">
-      </label>
-      <label>Модель генерации
-        <input type="text" id="generation-model" placeholder="qwen3">
-      </label>
-      <label>Модель эмбеддингов
-        <input type="text" id="embedding-model" placeholder="bge-m3">
-      </label>
-    </div>
-    <div class="row">
-      <button class="btn" id="save-config">Сохранить настройки</button>
-      <button class="btn btn--primary" id="reindex">Переиндексировать</button>
-      <button class="btn" id="build-map">Построить карту документов</button>
-      <span class="muted" id="index-info">Индекс не построен</span>
-    </div>
-    <div class="hint">Путь можно писать относительно папки сервиса (<code>data/docs</code>) или полностью (<code>/Users/me/docs</code>).</div>
-  </section>
-
-  <!-- Шаг 2 -->
-  <section class="card" id="step-guide">
-    <div class="card__head">
-      <span class="step">2</span>
-      <h2>Гайд по стилю</h2>
-    </div>
-    <p class="muted">Правила из гайда добавляются к каждому запросу к модели. При конфликте побеждает гайд.</p>
-    <div class="row">
-      <label class="file-btn">Загрузить .md
-        <input type="file" id="guide-file" accept=".md,.markdown,.txt" hidden>
-      </label>
-      <button class="btn" id="save-guide">Сохранить текст гайда</button>
-      <span class="muted" id="guide-info"></span>
-    </div>
-    <textarea id="guide-text" rows="10" placeholder="Правила формулирования документов…"></textarea>
-
-    <h3 class="subhead">Дополнительные файлы правил оформления</h3>
-    <p class="muted">Можно подложить сколько угодно файлов — все они обязательны к соблюдению.</p>
-    <div class="row">
-      <label class="file-btn">Добавить файлы правил
-        <input type="file" id="rules-files" accept=".md,.markdown,.txt" multiple hidden>
-      </label>
-      <span class="muted" id="rules-info"></span>
-    </div>
-    <div id="rules-list" class="file-list"></div>
-
-    <h3 class="subhead">Образцы: сервис сам изучит формат</h3>
-    <p class="muted">Подложите готовые документы — сервис разберёт их структуру и оформление один раз,
-      дальше будет придерживаться этого формата сам.</p>
-    <div class="row">
-      <label class="grow">Ссылка на страницу справки
-        <input type="text" id="import-url" placeholder="адрес статьи во внутреннем портале справки">
-      </label>
-      <button class="btn" id="import-preview">Посмотреть</button>
-      <button class="btn" id="import-save">Добавить как образец</button>
-    </div>
-    <pre id="import-result" class="result" hidden></pre>
-    <div class="row">
-      <label class="file-btn">Добавить образцы
-        <input type="file" id="sample-files" accept=".md,.markdown,.txt" multiple hidden>
-      </label>
-      <button class="btn btn--primary" id="learn-format">Изучить формат</button>
-      <label class="check"><input type="checkbox" id="learn-with-model" checked> дополнить правилами от модели</label>
-    </div>
-    <div id="samples-list" class="file-list"></div>
-    <div id="format-status" class="format-status"></div>
-    <div class="row">
-      <label class="check"><input type="checkbox" id="use-derived" checked> применять изученный формат</label>
-      <button class="btn" id="forget-format">Забыть формат</button>
-    </div>
-    <details id="format-details" hidden>
-      <summary>Показать изученные правила</summary>
-      <pre id="format-text" class="result"></pre>
-    </details>
-  </section>
-
-  <!-- Правила портала -->
-  <section class="card" id="portal-rules">
-    <div class="card__head">
-      <span class="step">✓</span>
-      <h2>Правила портала</h2>
-    </div>
-    <p class="muted">Типы статей, кастомные правила и глоссарий читаются из папки
-      <code>docs-config/</code>. Изменили файл — изменились правила.</p>
-    <div class="row">
-      <button class="btn" id="sync-glossary">Собрать словарь Vale из глоссария</button>
-      <button class="btn" id="check-locales">Сверить языковые версии</button>
-      <span class="muted" id="portal-rules-info"></span>
-    </div>
-    <div id="portal-rules-body" class="rules"></div>
-    <div id="locales-list" class="drift" hidden></div>
-  </section>
-
-  <!-- Шаг 3 -->
-  <section class="card" id="step-search">
-    <div class="card__head">
-      <span class="step">3</span>
-      <h2>Что изменилось</h2>
-    </div>
-    <textarea id="change-text" rows="6" placeholder="Например: срок жизни токена увеличен с 60 до 120 минут, добавлен ручной отзыв токена через POST /v1/auth/revoke"></textarea>
-    <div class="row">
-      <button class="btn btn--primary" id="find-doc">Найти подходящий документ</button>
-      <button class="btn" id="find-impact">Все затронутые статьи</button>
-      <button class="btn" id="check-drift">На что ещё посмотреть</button>
-      <span class="muted">или выберите вручную:</span>
-      <select id="manual-doc"><option value="">— документ из папки —</option></select>
-    </div>
-    <div id="candidates" class="candidates"></div>
-    <div id="impact-list" class="impact" hidden></div>
-    <div id="drift-list" class="drift" hidden></div>
-  </section>
-
-  <!-- Шаг 4 -->
-  <section class="card" id="step-generate">
-    <div class="card__head">
-      <span class="step">4</span>
-      <h2>Обновление документа</h2>
-    </div>
-    <div class="row">
-      <div class="chosen" id="chosen-doc">Документ не выбран</div>
-    </div>
-    <div class="row">
-      <label class="grow">Что править
-        <select id="section-select" disabled>
-          <option value="">весь документ целиком</option>
-        </select>
-      </label>
-      <span class="muted" id="section-hint"></span>
-      <button class="btn btn--primary" id="generate" disabled>Обновить по гайду</button>
-      <button class="btn" id="propose" disabled>Предложить правки по разделам</button>
-    </div>
-    <div class="hint">Правка одного раздела безопаснее и быстрее: остальной текст документа модель вообще не видит и не может испортить.</div>
-    <div id="warnings" class="warnings"></div>
-    <div id="changeset" class="changeset" hidden></div>
-  </section>
-
-  <!-- Шаг 5 -->
-  <section class="card" id="step-diff" hidden>
-    <div class="card__head">
-      <span class="step">5</span>
-      <h2>Что поменялось</h2>
-    </div>
-    <div class="row row--between">
-      <div class="stats" id="diff-stats"></div>
-      <div class="row">
-        <span class="muted" id="marks-info"></span>
-        <label class="check"><input type="checkbox" id="only-changes"> только изменения</label>
-        <div class="tabs">
-          <button class="tab tab--active" data-view="diff">Было / стало</button>
-          <button class="tab" data-view="preview">Превью с подсветкой</button>
-          <button class="tab" data-view="result">Исходный текст</button>
-        </div>
-        <button class="btn" id="review">Проверить по гайду</button>
-        <button class="btn" id="download">Скачать обновлённый .md</button>
-        <button class="btn" id="cascade">Перевести на другие языки</button>
-        <button class="btn" id="publish">Опубликовать…</button>
-        <button class="btn btn--danger" id="apply">Заменить оригинал</button>
-      </div>
-    </div>
-    <div id="diff-view" class="diff"></div>
-    <div id="cascade-list" class="cascade" hidden></div>
-    <div id="publish-box" class="publish" hidden></div>
-    <div id="checks-notes" class="review review--checks" hidden></div>
-    <div id="review-notes" class="review" hidden></div>
-    <div id="preview-pane" hidden>
-      <div class="row">
-        <label class="check"><input type="checkbox" id="show-removed"> показывать удалённые куски</label>
-        <span class="muted">Так документ будет выглядеть после правки. Новое — зелёным.</span>
-      </div>
-      <div id="preview-view" class="preview"></div>
-    </div>
-    <div id="result-pane" hidden>
-      <textarea id="result-view" class="result" rows="24" spellcheck="false"></textarea>
-      <div class="row">
-        <button class="btn" id="save-edits">Сохранить мои правки и пересчитать различия</button>
-        <span class="muted">Правки идут в тот же отдельный файл, оригинал не трогаем.</span>
-      </div>
-    </div>
-    <p class="hint">Оригинал не меняется. Результат сохранён отдельным файлом: <span id="result-file" class="mono"></span>. Кнопка «Заменить оригинал» делает копию исходного файла с расширением <code>.bak-…</code>.</p>
-  </section>
-  <!-- Новая статья -->
-  <section class="card" id="new-article">
-    <div class="card__head">
-      <span class="step">+</span>
-      <h2>Новая статья по шаблону</h2>
-    </div>
-    <p class="muted">Разделы берутся из шаблона выбранного типа. Факты — только из требований,
-      где данных нет, будет пометка [уточнить].</p>
-    <div class="grid">
-      <label>Название статьи
-        <input type="text" id="article-title" placeholder="Настройка вебхуков">
-      </label>
-      <label>Тип статьи
-        <select id="article-type"><option value="">определить по структуре</option></select>
-      </label>
-      <label>Профиль шаблона
-        <select id="article-profile"></select>
-      </label>
-    </div>
-    <textarea id="article-requirements" rows="6"
-      placeholder="Технические требования к функционалу: что делает, какие ограничения, для кого…"></textarea>
-    <div class="row">
-      <button class="btn btn--primary" id="create-article">Собрать черновик</button>
-      <label class="check"><input type="checkbox" id="article-examples" checked> брать тон из похожей статьи</label>
-    </div>
-  </section>
-
-  <!-- Сохранённые результаты -->
-  <section class="card" id="step-results">
-    <div class="card__head">
-      <span class="step">✓</span>
-      <h2>Сохранённые результаты</h2>
-    </div>
-    <p class="muted">Каждое обновление сохраняется отдельным файлом — ничего не теряется.</p>
-    <div id="results-list" class="results-list"></div>
-  </section>
-</main>
-
-<div id="toast" class="toast" hidden></div>
-<div id="overlay" class="overlay" hidden><div class="overlay__box"><div class="spinner"></div><p id="overlay-text">Работаем…</p></div></div>
-
+<script src="vendor/react.js"></script>
+<script src="vendor/htm.js"></script>
+<script src="vendor/hexa/_ds_bundle.js"></script>
 <script src="api.js"></script>
-<script src="app.js"></script>
+<script src="app/ui.js"></script>
+<script src="app/screens-flow.js"></script>
+<script src="app/screens-result.js"></script>
+<script src="app/screens-setup.js"></script>
+<script src="app/screens-more.js"></script>
+<script src="app/main.js"></script>
 </body>
 </html>

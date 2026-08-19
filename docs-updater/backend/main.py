@@ -621,7 +621,7 @@ def build_document_map(request: Request, force: bool = False, product: str | Non
     role = current_role(request, config)
     security.audit(config, "map-build", role=role, model=config["ollama"]["generation_model"])
     if not indexer.index_exists(config):
-        raise HTTPException(status_code=400, detail="Индекс пуст. Сначала нажмите «Переиндексировать».")
+        raise HTTPException(status_code=400, detail="Документы ещё не прочитаны. Нажмите «Прочитать документы» на экране настроек.")
     client = get_client(config)
     free_memory_for(config, client, "generation")
     return docmap.build_map(config, client, force=force)
@@ -683,7 +683,7 @@ def search_endpoint(payload: SearchRequest, request: Request, product: str | Non
     config = load_config_for(product)
     role = current_role(request, config)  # доступ проверяем раньше всего остального
     if not indexer.index_exists(config):
-        raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
+        raise HTTPException(status_code=400, detail="Документы ещё не прочитаны. Нажмите «Прочитать документы» на экране настроек.")
     top_k = payload.top_k or int(config["search"]["top_k"])
     client = get_client(config)
     free_memory_for(config, client, "embedding")
@@ -1041,7 +1041,7 @@ def impact_endpoint(payload: ImpactRequest, request: Request, product: str | Non
     role = current_role(request, config)
     security.audit(config, "impact", role=role, description=payload.change_description, model=config["ollama"]["generation_model"])
     if not indexer.index_exists(config):
-        raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
+        raise HTTPException(status_code=400, detail="Документы ещё не прочитаны. Нажмите «Прочитать документы» на экране настроек.")
     client = get_client(config)
     free_memory_for(config, client, "embedding")
     return impact.analyze(config, client, payload.change_description, top_k=payload.top_k)
@@ -1346,7 +1346,7 @@ def review_endpoint(payload: ReviewRequest, request: Request, product: str | Non
     if not style_guide.strip():
         raise HTTPException(
             status_code=400,
-            detail="Гайд по стилю пуст — проверять не по чему. Загрузите гайд в шаге 2.",
+            detail="Правила оформления пустые — проверять не по чему. Добавьте их на экране «Правила оформления».",
         )
     client = get_client(config)
     free_memory_for(config, client, "generation")
