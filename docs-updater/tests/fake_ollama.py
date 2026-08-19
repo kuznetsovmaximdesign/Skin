@@ -31,6 +31,7 @@ class FakeOllama:
         self.fix_response: str | None = None
         # Необязательное преобразование присланного текста: (prompt, text) -> text.
         self.transform = None
+        self.impact_response = "КЛАСС: дополнить\nПРИЧИНА: описан затронутый функционал"
         # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
         self.chunk_delay = 0.0
         self.review_response = (
@@ -129,6 +130,13 @@ class FakeOllama:
             # По умолчанию «модель» ничего не чинит и возвращает текст как есть.
             match = re.search(r"# ТЕКСТ\n\n(.*?)\n\n# НАРУШЕНИЯ", prompt, re.DOTALL)
             return match.group(1) if match else ""
+        if "Классифицируй, что нужно сделать с этим документом" in prompt:
+            return self.impact_response
+        if "# ЗАДАНИЕ\n\nНапиши раздел" in prompt:
+            found = re.search(r"Напиши раздел «([^»]+)» заголовком уровня (\d+)", prompt)
+            if found:
+                title, level = found.group(1), int(found.group(2))
+                return f"{'#' * level} {title}\n\nТекст раздела по требованиям. [уточнить] точные лимиты."
         if "Напиши, что документирует этот документ" in prompt:
             title = re.search(r"# ДОКУМЕНТ: (.+)", prompt)
             name = title.group(1).strip() if title else "документ"

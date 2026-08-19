@@ -41,6 +41,14 @@ DEFAULTS: dict[str, Any] = {
     },
     "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
     "generation": {"temperature": 0.2, "num_ctx": 8192},
+    # Продукты: у каждого свои документы, гайды, шаблон и индекс.
+    # Незаданные поля продукт наследует из общих настроек выше.
+    "products": {
+        "default": "core",
+        "items": {
+            "core": {"name": "Основной продукт"},
+        },
+    },
     "checks": {
         "enabled": True,
         "builtin_prose": True,
@@ -85,6 +93,55 @@ def save_config(config: dict[str, Any]) -> None:
         yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+
+
+def product_ids(config: dict[str, Any]) -> list[str]:
+    items = (config.get("products") or {}).get("items") or {}
+    return list(items.keys())
+
+
+def default_product(config: dict[str, Any]) -> str:
+    products = config.get("products") or {}
+    items = products.get("items") or {}
+    wanted = products.get("default")
+    if wanted in items:
+        return wanted
+    return next(iter(items), "core")
+
+
+def for_product(config: dict[str, Any], product: str | None = None) -> dict[str, Any]:
+    """Настройки одного продукта: общие правила плюс его собственные переопределения.
+
+    Изоляция контекстов делается здесь: дальше весь код работает с путями продукта
+    и физически не видит документы и гайды соседнего.
+    """
+    products = config.get("products") or {}
+    items = products.get("items") or {}
+    chosen = product or default_product(config)
+    if chosen not in items:
+        raise KeyError(chosen)
+
+    entry = dict(items[chosen] or {})
+    result = copy.deepcopy(config)
+    result["product"] = chosen
+    result["product_name"] = entry.get("name", chosen)
+
+    for section in ("paths", "checks", "ollama", "search", "generation"):
+        override = entry.get(section)
+        if isinstance(override, dict):
+            result[section] = _merge(result.get(section, {}), override)
+
+    # Короткая форма: поля путей можно писать прямо в продукте, без вложенного paths.
+    path_keys = set(DEFAULTS["paths"]) | {"rules_dir"}
+    inline_paths = {key: value for key, value in entry.items() if key in path_keys}
+    if inline_paths:
+        result["paths"] = _merge(result["paths"], inline_paths)
+
+    check_keys = set(DEFAULTS["checks"])
+    inline_checks = {key: value for key, value in entry.items() if key in check_keys}
+    if inline_checks:
+        result["checks"] = _merge(result["checks"], inline_checks)
+    return result
 
 
 def style_guide_paths(config: dict[str, Any]) -> list[Path]:

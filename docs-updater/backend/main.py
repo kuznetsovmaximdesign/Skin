@@ -18,10 +18,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import changeset as changeset_module
-from . import checks, docmap, drift, indexer, search, sections, style
+from . import article, checks, docmap, drift, impact, indexer, search, sections, style
 from .checks import prose as prose_rules
 from .verify import check_and_fix
-from .config import PROJECT_ROOT, load_config, resolve_path, save_config, style_guide_paths
+from .config import (
+    PROJECT_ROOT,
+    default_product,
+    for_product,
+    load_config,
+    product_ids,
+    resolve_path,
+    save_config,
+    style_guide_paths,
+)
 from .diffing import build_diff, unified_diff
 from .generator import check_result, generate_update, prepare_generation, review_document
 from .ollama_client import OllamaClient, OllamaError, clean_model_output
@@ -32,6 +41,31 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 # --- вспомогательное -------------------------------------------------------
+
+
+def load_config_for(product: str | None = None) -> dict[str, Any]:
+    """Настройки выбранного продукта. Продукты изолированы: свои документы, гайды, индекс."""
+    config = load_config()
+    try:
+        return for_product(config, product)
+    except KeyError:
+        available = ", ".join(product_ids(config)) or "нет ни одного"
+        raise HTTPException(
+            status_code=404,
+            detail=f"Продукт «{product}» не настроен. Доступные продукты: {available}.",
+        )
+
+
+def update_setting(product: str | None, section: str, values: dict[str, Any]) -> None:
+    """Пишет настройку туда, где ей место: в общие правила или в переопределения продукта."""
+    raw = load_config()
+    if product and product != default_product(raw):
+        entry = raw.setdefault("products", {}).setdefault("items", {}).setdefault(product, {})
+        target = entry.setdefault(section, {})
+    else:
+        target = raw.setdefault(section, {})
+    target.update(values)
+    save_config(raw)
 
 
 def get_client(config: dict[str, Any]) -> OllamaClient:
@@ -202,6 +236,19 @@ class DecideRequest(BaseModel):
     comment: str = ""
 
 
+class NewArticleRequest(BaseModel):
+    title: str = Field(min_length=1)
+    requirements: str = Field(min_length=1)
+    file_name: str | None = None
+    front_matter: dict[str, str] | None = None
+    use_examples: bool = True
+
+
+class ImpactRequest(BaseModel):
+    change_description: str = Field(min_length=1)
+    top_k: int = 8
+
+
 class DriftRequest(BaseModel):
     change_description: str = ""
     doc_path: str = ""
@@ -238,9 +285,31 @@ class UseDerivedRequest(BaseModel):
 # --- статус и конфигурация -------------------------------------------------
 
 
+@app.get("/api/products")
+def products() -> dict[str, Any]:
+    """Список продуктов: у каждого свои документы, гайды, шаблон и индекс."""
+    raw = load_config()
+    items = (raw.get("products") or {}).get("items") or {}
+    result = []
+    for identifier in items:
+        product_config = for_product(raw, identifier)
+        result.append(
+            {
+                "id": identifier,
+                "name": product_config.get("product_name", identifier),
+                "docs_dir": str(resolve_path(product_config["paths"]["docs_dir"])),
+                "index_file": str(resolve_path(product_config["paths"]["index_file"])),
+                "documents": len(indexer.find_markdown_files(resolve_path(product_config["paths"]["docs_dir"]))),
+                "indexed": indexer.index_exists(product_config),
+                "style_guides": [path.name for path in style_guide_paths(product_config)],
+            }
+        )
+    return {"default": default_product(raw), "products": result}
+
+
 @app.get("/api/status")
-def status() -> dict[str, Any]:
-    config = load_config()
+def status(product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     guide_path = resolve_path(config["paths"]["style_guide"])
     ollama: dict[str, Any] = {"host": config["ollama"]["host"]}
@@ -258,6 +327,8 @@ def status() -> dict[str, Any]:
         ollama.update({"available": False, "models": [], **exc.as_dict()})
 
     return {
+        "product": config.get("product", ""),
+        "product_name": config.get("product_name", ""),
         "config": {
             "docs_dir": str(docs_dir),
             "docs_dir_raw": config["paths"]["docs_dir"],
@@ -278,33 +349,37 @@ def status() -> dict[str, Any]:
 
 
 @app.post("/api/config")
-def update_config(patch: ConfigPatch) -> dict[str, Any]:
-    config = load_config()
+def update_config(patch: ConfigPatch, product: str | None = None) -> dict[str, Any]:
+    paths: dict[str, Any] = {}
+    ollama: dict[str, Any] = {}
     if patch.docs_dir:
-        config["paths"]["docs_dir"] = patch.docs_dir.strip()
+        paths["docs_dir"] = patch.docs_dir.strip()
     if patch.style_guide:
-        config["paths"]["style_guide"] = patch.style_guide.strip()
+        paths["style_guide"] = patch.style_guide.strip()
     if patch.generation_model:
-        config["ollama"]["generation_model"] = patch.generation_model.strip()
+        ollama["generation_model"] = patch.generation_model.strip()
     if patch.embedding_model:
-        config["ollama"]["embedding_model"] = patch.embedding_model.strip()
-    save_config(config)
-    return status()
+        ollama["embedding_model"] = patch.embedding_model.strip()
+    if paths:
+        update_setting(product, "paths", paths)
+    if ollama:
+        update_setting(product, "ollama", ollama)
+    return status(product)
 
 
 # --- гайд по стилю ---------------------------------------------------------
 
 
 @app.get("/api/style-guide")
-def get_style_guide() -> dict[str, Any]:
-    config = load_config()
+def get_style_guide(product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     path = resolve_path(config["paths"]["style_guide"])
     return {"path": str(path), "exists": path.exists(), "content": read_style_guide(config)}
 
 
 @app.put("/api/style-guide")
-def put_style_guide(payload: StyleGuideText) -> dict[str, Any]:
-    config = load_config()
+def put_style_guide(payload: StyleGuideText, product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     path = resolve_path(config["paths"]["style_guide"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload.content, encoding="utf-8")
@@ -312,10 +387,10 @@ def put_style_guide(payload: StyleGuideText) -> dict[str, Any]:
 
 
 @app.post("/api/style-guide/upload")
-async def upload_style_guide(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_style_guide(file: UploadFile = File(...), product: str | None = None) -> dict[str, Any]:
     if not (file.filename or "").lower().endswith((".md", ".markdown", ".txt")):
         raise HTTPException(status_code=400, detail="Гайд должен быть файлом .md")
-    config = load_config()
+    config = load_config_for(product)
     path = resolve_path(config["paths"]["style_guide"])
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (await file.read()).decode("utf-8", errors="replace")
@@ -327,14 +402,14 @@ async def upload_style_guide(file: UploadFile = File(...)) -> dict[str, Any]:
 
 
 @app.get("/api/style-sources")
-def style_sources_endpoint() -> dict[str, Any]:
-    return style_sources(load_config())
+def style_sources_endpoint(product: str | None = None) -> dict[str, Any]:
+    return style_sources(load_config_for(product))
 
 
 @app.post("/api/style-guides/upload")
-async def upload_style_guides(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+async def upload_style_guides(files: list[UploadFile] = File(...), product: str | None = None) -> dict[str, Any]:
     """Добавляет файлы с правилами оформления. Их может быть сколько угодно."""
-    config = load_config()
+    config = load_config_for(product)
     target_dir = resolve_path(config["paths"].get("rules_dir", "data/rules"))
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -354,28 +429,28 @@ async def upload_style_guides(files: list[UploadFile] = File(...)) -> dict[str, 
         config["paths"]["style_guides"] = guides
         added.append(name)
 
-    save_config(config)
-    return {"added": added, **style_sources(load_config())}
+    update_setting(product, "paths", {"style_guides": config["paths"]["style_guides"]})
+    return {"added": added, **style_sources(load_config_for(product))}
 
 
 @app.delete("/api/style-guides")
-def remove_style_guide(file: str) -> dict[str, Any]:
+def remove_style_guide(file: str, product: str | None = None) -> dict[str, Any]:
     """Убирает файл правил из списка (сам файл на диске остаётся)."""
-    config = load_config()
+    config = load_config_for(product)
     guides = config["paths"].get("style_guides") or []
     if isinstance(guides, str):
         guides = [guides]
     kept = [item for item in guides if Path(item).name != Path(file).name]
-    config["paths"]["style_guides"] = kept
+    values: dict[str, Any] = {"style_guides": kept}
     if config["paths"].get("style_guide") and Path(config["paths"]["style_guide"]).name == Path(file).name:
-        config["paths"]["style_guide"] = kept[0] if kept else ""
-    save_config(config)
-    return style_sources(load_config())
+        values["style_guide"] = kept[0] if kept else ""
+    update_setting(product, "paths", values)
+    return style_sources(load_config_for(product))
 
 
 @app.get("/api/samples")
-def list_samples() -> dict[str, Any]:
-    directory = samples_dir(load_config())
+def list_samples(product: str | None = None) -> dict[str, Any]:
+    directory = samples_dir(load_config_for(product))
     files = sorted(directory.glob("*.md")) if directory.exists() else []
     return {
         "dir": str(directory),
@@ -384,9 +459,9 @@ def list_samples() -> dict[str, Any]:
 
 
 @app.post("/api/samples/upload")
-async def upload_samples(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+async def upload_samples(files: list[UploadFile] = File(...), product: str | None = None) -> dict[str, Any]:
     """Загрузка готовых документов-образцов, по которым сервис изучает формат."""
-    directory = samples_dir(load_config())
+    directory = samples_dir(load_config_for(product))
     directory.mkdir(parents=True, exist_ok=True)
     added: list[str] = []
     for file in files:
@@ -397,12 +472,12 @@ async def upload_samples(files: list[UploadFile] = File(...)) -> dict[str, Any]:
             (await file.read()).decode("utf-8", errors="replace"), encoding="utf-8"
         )
         added.append(name)
-    return {"added": added, **list_samples()}
+    return {"added": added, **list_samples(product)}
 
 
 @app.delete("/api/samples")
-def remove_sample(file: str) -> dict[str, Any]:
-    directory = samples_dir(load_config())
+def remove_sample(file: str, product: str | None = None) -> dict[str, Any]:
+    directory = samples_dir(load_config_for(product))
     target = safe_join(directory, Path(file).name)
     if target.exists():
         target.unlink()
@@ -410,9 +485,9 @@ def remove_sample(file: str) -> dict[str, Any]:
 
 
 @app.post("/api/format/learn")
-def learn_format(payload: LearnFormatRequest) -> dict[str, Any]:
+def learn_format(payload: LearnFormatRequest, product: str | None = None) -> dict[str, Any]:
     """Разбирает образцы и запоминает формат: дальше он применяется сам при каждой генерации."""
-    config = load_config()
+    config = load_config_for(product)
     directory = samples_dir(config)
     files = sorted(directory.glob("*.md")) if directory.exists() else []
     if not files:
@@ -440,37 +515,39 @@ def learn_format(payload: LearnFormatRequest) -> dict[str, Any]:
     target.write_text(text, encoding="utf-8")
     profile_path(config).write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    config["paths"]["use_derived_guide"] = True
-    save_config(config)
+    update_setting(product, "paths", {"use_derived_guide": True})
 
-    return {"profile": profile, "text": text, "used_model": bool(model_rules.strip()), **style_sources(load_config())}
+    return {
+        "profile": profile,
+        "text": text,
+        "used_model": bool(model_rules.strip()),
+        **style_sources(load_config_for(product)),
+    }
 
 
 @app.post("/api/format/use")
-def toggle_derived(payload: UseDerivedRequest) -> dict[str, Any]:
+def toggle_derived(payload: UseDerivedRequest, product: str | None = None) -> dict[str, Any]:
     """Включает или выключает применение изученного формата."""
-    config = load_config()
-    config["paths"]["use_derived_guide"] = payload.enabled
-    save_config(config)
-    return style_sources(load_config())
+    update_setting(product, "paths", {"use_derived_guide": payload.enabled})
+    return style_sources(load_config_for(product))
 
 
 @app.delete("/api/format")
-def forget_format() -> dict[str, Any]:
+def forget_format(product: str | None = None) -> dict[str, Any]:
     """Забыть изученный формат."""
-    config = load_config()
+    config = load_config_for(product)
     for path in (derived_guide_path(config), profile_path(config)):
         if path.exists():
             path.unlink()
-    return style_sources(load_config())
+    return style_sources(load_config_for(product))
 
 
 # --- индекс ----------------------------------------------------------------
 
 
 @app.post("/api/reindex")
-def reindex() -> dict[str, Any]:
-    config = load_config()
+def reindex(product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     if not docs_dir.exists():
         raise HTTPException(status_code=400, detail=f"Папка документации не найдена: {docs_dir}")
@@ -482,9 +559,9 @@ def reindex() -> dict[str, Any]:
 
 
 @app.get("/api/map")
-def document_map() -> dict[str, Any]:
+def document_map(product: str | None = None) -> dict[str, Any]:
     """Карта «документ ↔ что он документирует»."""
-    config = load_config()
+    config = load_config_for(product)
     documents = docmap.read_map(config)
     return {
         "documents": documents,
@@ -494,9 +571,9 @@ def document_map() -> dict[str, Any]:
 
 
 @app.post("/api/map/build")
-def build_document_map(force: bool = False) -> dict[str, Any]:
+def build_document_map(force: bool = False, product: str | None = None) -> dict[str, Any]:
     """Считает недостающие резюме документов. Модели работают по очереди."""
-    config = load_config()
+    config = load_config_for(product)
     if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Сначала нажмите «Переиндексировать».")
     client = get_client(config)
@@ -505,8 +582,8 @@ def build_document_map(force: bool = False) -> dict[str, Any]:
 
 
 @app.get("/api/documents")
-def documents() -> dict[str, Any]:
-    config = load_config()
+def documents(product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     files = indexer.find_markdown_files(docs_dir)
     return {
@@ -519,8 +596,8 @@ def documents() -> dict[str, Any]:
 
 
 @app.get("/api/document")
-def document(path: str) -> dict[str, Any]:
-    config = load_config()
+def document(path: str, product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     target = safe_join(docs_dir, path)
     if not target.exists():
@@ -529,9 +606,9 @@ def document(path: str) -> dict[str, Any]:
 
 
 @app.get("/api/outline")
-def document_outline(path: str) -> dict[str, Any]:
+def document_outline(path: str, product: str | None = None) -> dict[str, Any]:
     """Разделы документа — чтобы править один раздел, а не весь текст."""
-    config = load_config()
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     target = safe_join(docs_dir, path)
     if not target.exists():
@@ -556,8 +633,8 @@ def document_outline(path: str) -> dict[str, Any]:
 
 
 @app.post("/api/search")
-def search_endpoint(payload: SearchRequest) -> dict[str, Any]:
-    config = load_config()
+def search_endpoint(payload: SearchRequest, product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
     top_k = payload.top_k or int(config["search"]["top_k"])
@@ -636,9 +713,9 @@ def store_result(
 
 
 @app.post("/api/changeset/propose")
-def propose_changeset(payload: ProposeRequest) -> dict[str, Any]:
+def propose_changeset(payload: ProposeRequest, product: str | None = None) -> dict[str, Any]:
     """Предлагает правки по разделам с обоснованием. Документ не меняется."""
-    config = load_config()
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     source = safe_join(docs_dir, payload.doc_path)
     if not source.exists():
@@ -660,8 +737,8 @@ def propose_changeset(payload: ProposeRequest) -> dict[str, Any]:
 
 
 @app.get("/api/changeset/{changeset_id}")
-def get_changeset(changeset_id: str) -> dict[str, Any]:
-    config = load_config()
+def get_changeset(changeset_id: str, product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     result = changeset_module.load(config, changeset_id)
     if not result:
         raise HTTPException(status_code=404, detail="Набор правок не найден.")
@@ -669,9 +746,9 @@ def get_changeset(changeset_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/changeset/{changeset_id}/decide")
-def decide_changeset(changeset_id: str, payload: DecideRequest) -> dict[str, Any]:
+def decide_changeset(changeset_id: str, payload: DecideRequest, product: str | None = None) -> dict[str, Any]:
     """Писатель принимает или отклоняет отдельную правку; отклонения запоминаются."""
-    config = load_config()
+    config = load_config_for(product)
     result = changeset_module.load(config, changeset_id)
     if not result:
         raise HTTPException(status_code=404, detail="Набор правок не найден.")
@@ -682,9 +759,9 @@ def decide_changeset(changeset_id: str, payload: DecideRequest) -> dict[str, Any
 
 
 @app.post("/api/changeset/{changeset_id}/build")
-def build_changeset(changeset_id: str) -> dict[str, Any]:
+def build_changeset(changeset_id: str, product: str | None = None) -> dict[str, Any]:
     """Собирает документ из принятых правок и сохраняет отдельным файлом."""
-    config = load_config()
+    config = load_config_for(product)
     result = changeset_module.load(config, changeset_id)
     if not result:
         raise HTTPException(status_code=404, detail="Набор правок не найден.")
@@ -723,16 +800,93 @@ def build_changeset(changeset_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/feedback")
-def feedback(doc_path: str = "") -> dict[str, Any]:
+def feedback(doc_path: str = "", product: str | None = None) -> dict[str, Any]:
     """Локальный лог: что писатель отклонял раньше."""
-    config = load_config()
+    config = load_config_for(product)
     return {"notes": changeset_module.feedback_notes(config, doc_path)}
 
 
+@app.post("/api/article/new")
+def new_article(payload: NewArticleRequest, product: str | None = None) -> dict[str, Any]:
+    """Черновик новой статьи по шаблону продукта. Проходит тот же цикл проверки, что и правки."""
+    config = load_config_for(product)
+    style_guide = read_style_guide(config)
+    client = get_client(config)
+
+    # Пример тона берём из ближайшей существующей статьи; факты из неё не используются.
+    example = ""
+    if payload.use_examples and indexer.index_exists(config):
+        free_memory_for(config, client, "embedding")
+        found = search.search_documents(
+            indexer.index_path(config), client, payload.requirements, 1
+        )
+        if found:
+            docs_dir = resolve_path(config["paths"]["docs_dir"])
+            source = docs_dir / found[0]["path"]
+            if source.exists():
+                example = indexer.read_text(source)
+
+    free_memory_for(config, client, "generation")
+    drafted = article.draft(
+        config=config,
+        client=client,
+        title=payload.title,
+        requirements=payload.requirements,
+        style_guide=style_guide,
+        example=example,
+        front_matter=payload.front_matter,
+    )
+    verified = check_and_fix(config, client, drafted["text"], style_guide, "document")
+
+    output_dir = resolve_path(config["paths"]["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = slugify(payload.file_name or payload.title)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_path = unique_path(output_dir, f"{stem}.{stamp}", ".md")
+    out_path.write_text(verified["text"], encoding="utf-8")
+    write_meta(
+        out_path,
+        {
+            "kind": "new-article",
+            "title": payload.title,
+            "product": config.get("product", ""),
+            "change_description": payload.requirements[:500],
+            "model": config["ollama"]["generation_model"],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "style_guide_used": bool(style_guide.strip()),
+        },
+    )
+
+    return {
+        "title": payload.title,
+        "sections": drafted["sections"],
+        "text": verified["text"],
+        "result_file": out_path.name,
+        "result_path": str(out_path),
+        "example_from": found[0]["path"] if payload.use_examples and example else "",
+        "checks": {
+            "violations": verified["violations"],
+            "summary": verified["summary"],
+            "fix_iterations": verified["iterations"],
+        },
+    }
+
+
+@app.post("/api/impact")
+def impact_endpoint(payload: ImpactRequest, product: str | None = None) -> dict[str, Any]:
+    """Все статьи, которых касается изменение: класс, релевантность и причина."""
+    config = load_config_for(product)
+    if not indexer.index_exists(config):
+        raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
+    client = get_client(config)
+    free_memory_for(config, client, "embedding")
+    return impact.analyze(config, client, payload.change_description, top_k=payload.top_k)
+
+
 @app.post("/api/drift")
-def drift_endpoint(payload: DriftRequest) -> dict[str, Any]:
+def drift_endpoint(payload: DriftRequest, product: str | None = None) -> dict[str, Any]:
     """«На что ещё посмотреть»: битые ссылки, устаревшие значения, следы удалённого, пометки."""
-    config = load_config()
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     if not docs_dir.exists():
         raise HTTPException(status_code=400, detail=f"Папка документации не найдена: {docs_dir}")
@@ -749,9 +903,9 @@ def drift_endpoint(payload: DriftRequest) -> dict[str, Any]:
 
 
 @app.post("/api/check")
-def check_endpoint(payload: ReviewRequest) -> dict[str, Any]:
+def check_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[str, Any]:
     """Проверка произвольного текста: формулировка, оформление, шаблон."""
-    config = load_config()
+    config = load_config_for(product)
     violations = checks.run_checks(payload.content, config)
     return {
         "violations": [item.as_dict() for item in violations],
@@ -760,8 +914,8 @@ def check_endpoint(payload: ReviewRequest) -> dict[str, Any]:
 
 
 @app.post("/api/generate")
-def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
-    config = load_config()
+def generate_endpoint(payload: GenerateRequest, product: str | None = None) -> dict[str, Any]:
+    config = load_config_for(product)
     context = load_generation_context(config, payload)
     original, style_guide = context["original"], context["style_guide"]
     span, section_payload = context["span"], context["section"]
@@ -822,9 +976,9 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
 
 
 @app.post("/api/generate/stream")
-def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
+def generate_stream_endpoint(payload: GenerateRequest, product: str | None = None) -> StreamingResponse:
     """То же обновление, но текст отдаётся по мере генерации — писателю не нужно ждать вслепую."""
-    config = load_config()
+    config = load_config_for(product)
     context = load_generation_context(config, payload)
     original, style_guide = context["original"], context["style_guide"]
     span, section_payload = context["span"], context["section"]
@@ -913,9 +1067,9 @@ def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
 
 
 @app.post("/api/review")
-def review_endpoint(payload: ReviewRequest) -> dict[str, Any]:
+def review_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[str, Any]:
     """Проверка готового текста по гайду вторым проходом модели."""
-    config = load_config()
+    config = load_config_for(product)
     style_guide = read_style_guide(config)
     if not style_guide.strip():
         raise HTTPException(
@@ -929,8 +1083,8 @@ def review_endpoint(payload: ReviewRequest) -> dict[str, Any]:
 
 
 @app.get("/api/download")
-def download(file: str) -> FileResponse:
-    config = load_config()
+def download(file: str, product: str | None = None) -> FileResponse:
+    config = load_config_for(product)
     output_dir = resolve_path(config["paths"]["output_dir"])
     target = safe_join(output_dir, file)
     if not target.exists():
@@ -939,9 +1093,9 @@ def download(file: str) -> FileResponse:
 
 
 @app.post("/api/results/save")
-def save_result(payload: SaveResultRequest) -> dict[str, Any]:
+def save_result(payload: SaveResultRequest, product: str | None = None) -> dict[str, Any]:
     """Сохраняет правки, внесённые писателем вручную. Оригинал по-прежнему не трогаем."""
-    config = load_config()
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     output_dir = resolve_path(config["paths"]["output_dir"])
     source = safe_join(docs_dir, payload.doc_path)
@@ -967,9 +1121,9 @@ def save_result(payload: SaveResultRequest) -> dict[str, Any]:
 
 
 @app.get("/api/results")
-def results(limit: int = 20) -> dict[str, Any]:
+def results(limit: int = 20, product: str | None = None) -> dict[str, Any]:
     """Ранее сохранённые результаты — чтобы ничего не потерялось между сессиями."""
-    config = load_config()
+    config = load_config_for(product)
     output_dir = resolve_path(config["paths"]["output_dir"])
     if not output_dir.exists():
         return {"output_dir": str(output_dir), "results": []}
@@ -993,9 +1147,9 @@ def results(limit: int = 20) -> dict[str, Any]:
 
 
 @app.post("/api/apply")
-def apply(payload: ApplyRequest) -> dict[str, Any]:
+def apply(payload: ApplyRequest, product: str | None = None) -> dict[str, Any]:
     """Явное подтверждение записи в оригинал. Перед перезаписью делается .bak."""
-    config = load_config()
+    config = load_config_for(product)
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     output_dir = resolve_path(config["paths"]["output_dir"])
     source = safe_join(docs_dir, payload.doc_path)

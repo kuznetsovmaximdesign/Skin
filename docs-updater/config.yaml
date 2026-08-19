@@ -53,6 +53,22 @@ generation:
   # Для qwen3:4b на 18 ГБ 8192 — разумный компромисс, при необходимости можно 16384.
   num_ctx: 8192
 
+# Продукты. У каждого свои документы, гайды, шаблон, индекс и результаты.
+# Поля, которых нет у продукта, наследуются из общих настроек выше.
+products:
+  default: "core"
+  items:
+    core:
+      name: "Основной продукт"
+    # Пример второго продукта: раскомментируйте и поправьте пути.
+    # beta:
+    #   name: "Бета"
+    #   docs_dir: "data/beta/docs"
+    #   style_guides: ["data/beta/styleguide.md"]
+    #   template_schema: "data/beta/template.schema.yaml"
+    #   index_file: "data/beta/index.sqlite3"
+    #   output_dir: "data/beta/output"
+
 checks:
   # Машинная проверка соответствия: формулировка + оформление + шаблон.
   enabled: true

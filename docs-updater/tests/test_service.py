@@ -1343,3 +1343,191 @@ def test_golden_cases_pass(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "провалено: 0" in result.stdout
+
+
+# --- мультипродуктовость: контексты изолированы -----------------------------
+
+
+def add_second_product(client) -> None:
+    """Второй продукт со своими документами, гайдом и индексом."""
+    other_docs = client.tmp_path / "beta-docs"
+    other_docs.mkdir()
+    (other_docs / "beta-api.md").write_text(
+        "# Бета API\n\n## Назначение\n\nДокумент описывает бета-интерфейс.\n\n"
+        "## Ограничения\n\n- Только для внутренних команд.\n",
+        encoding="utf-8",
+    )
+    (client.tmp_path / "beta-guide.md").write_text(
+        "# Гайд беты\n\n- В бете допускаются черновые формулировки.\n", encoding="utf-8"
+    )
+
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["products"] = {
+        "default": "core",
+        "items": {
+            "core": {"name": "Основной продукт"},
+            "beta": {
+                "name": "Бета",
+                "docs_dir": str(other_docs),
+                "style_guides": [str(client.tmp_path / "beta-guide.md")],
+                "style_guide": str(client.tmp_path / "beta-guide.md"),
+                "index_file": str(client.tmp_path / "beta-index.sqlite3"),
+                "output_dir": str(client.tmp_path / "beta-output"),
+                "derived_guide": str(client.tmp_path / "beta-derived.md"),
+                "samples_dir": str(client.tmp_path / "beta-samples"),
+            },
+        },
+    }
+    (client.tmp_path / "config.yaml").write_text(
+        yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8"
+    )
+
+
+def test_products_are_listed(client):
+    add_second_product(client)
+    data = client.get("/api/products").json()
+    assert data["default"] == "core"
+    assert {item["id"] for item in data["products"]} == {"core", "beta"}
+    beta = next(item for item in data["products"] if item["id"] == "beta")
+    assert beta["documents"] == 1
+    assert beta["style_guides"] == ["beta-guide.md"]
+
+
+def test_search_does_not_cross_products(client):
+    add_second_product(client)
+    client.post("/api/reindex")
+    client.post("/api/reindex", params={"product": "beta"})
+
+    core = client.post("/api/search", json={"query": "токен доступа"}).json()["candidates"]
+    beta = client.post("/api/search", json={"query": "токен доступа"}, params={"product": "beta"}).json()["candidates"]
+
+    assert {item["path"] for item in core} == {"api-auth.md", "export-reports.md", "install-agent.md"}
+    assert {item["path"] for item in beta} == {"beta-api.md"}
+
+
+def test_each_product_has_its_own_rules(client):
+    add_second_product(client)
+    client.post(
+        "/api/generate",
+        json={"doc_path": "beta-api.md", "change_description": "правка"},
+        params={"product": "beta"},
+    )
+    prompt = last_prompt(client.ollama, "ИСХОДНЫЙ ДОКУМЕНТ")
+    assert "Гайд беты" in prompt
+    assert "Гайд по стилю технической документации" not in prompt
+
+
+def test_documents_of_another_product_are_not_reachable(client):
+    add_second_product(client)
+    response = client.get("/api/document", params={"path": "api-auth.md", "product": "beta"})
+    assert response.status_code == 404
+
+
+def test_unknown_product_is_reported(client):
+    response = client.get("/api/status", params={"product": "нет-такого"})
+    assert response.status_code == 404
+    assert "не настроен" in response.json()["detail"]
+
+
+def test_product_settings_do_not_leak_into_common(client):
+    add_second_product(client)
+    client.post("/api/config", json={"generation_model": "qwen3:8b"}, params={"product": "beta"})
+
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["products"]["items"]["beta"]["ollama"]["generation_model"] == "qwen3:8b"
+    assert raw["ollama"]["generation_model"] == "qwen3:4b"
+    assert client.get("/api/status").json()["config"]["generation_model"] == "qwen3:4b"
+    assert client.get("/api/status", params={"product": "beta"}).json()["config"]["generation_model"] == "qwen3:8b"
+
+
+# --- новая статья по шаблону -----------------------------------------------
+
+
+def test_new_article_follows_the_template(client):
+    data = client.post(
+        "/api/article/new",
+        json={"title": "Настройка вебхуков", "requirements": "Вебхуки шлют POST на адрес клиента."},
+    ).json()
+
+    assert data["sections"] == ["Назначение", "Ограничения", "Предварительные условия"]
+    text = data["text"]
+    assert text.startswith("# Настройка вебхуков")
+    for section in ("## Назначение", "## Ограничения", "## Предварительные условия"):
+        assert section in text
+    assert "[уточнить]" in text  # где данных не хватило — пометка, а не выдумка
+    assert data["checks"]["summary"]["errors"] == 0
+    assert (client.tmp_path / "output" / data["result_file"]).read_text(encoding="utf-8") == text
+
+
+def test_new_article_uses_existing_docs_only_as_tone_example(client):
+    client.post("/api/reindex")
+    client.post(
+        "/api/article/new",
+        json={"title": "Новая статья", "requirements": "Требования к функционалу."},
+    )
+    prompt = last_prompt(client.ollama, "Напиши раздел")
+    assert "только манера изложения, факты не копировать" in prompt
+
+
+def test_new_article_can_skip_examples(client):
+    data = client.post(
+        "/api/article/new",
+        json={"title": "Без примера", "requirements": "Требования.", "use_examples": False},
+    ).json()
+    assert data["example_from"] == ""
+
+
+def test_new_article_is_checked_and_fixed(client):
+    client.ollama.generate_response = "## Назначение\n\nЮзер должен залогиниться."
+    client.ollama.fix_response = "## Назначение\n\nПользователь должен войти."
+    data = client.post(
+        "/api/article/new",
+        json={"title": "Статья", "requirements": "Требования.", "use_examples": False},
+    ).json()
+    assert data["checks"]["fix_iterations"] >= 1
+    assert "Юзер" not in data["text"]
+
+
+# --- автосвязывание по многим статьям --------------------------------------
+
+
+def test_impact_lists_all_affected_documents(client):
+    client.post("/api/reindex")
+    client.post("/api/map/build")
+
+    data = client.post(
+        "/api/impact", json={"change_description": "Токен теперь живёт 120 минут, экспорт отчётов не менялся."}
+    ).json()
+
+    assert data["summary"]["total"] >= 1
+    assert data["summary"]["considered"] >= 1
+    first = data["documents"][0]
+    assert first["action"] in {"дополнить", "заменить", "устарело"}
+    assert first["reason"]
+    assert first["relevance"] >= 45
+    # отсортировано по убыванию релевантности
+    assert data["documents"] == sorted(data["documents"], key=lambda item: -item["relevance"])
+
+
+def test_impact_classification_comes_from_the_model(client):
+    client.post("/api/reindex")
+    client.ollama.impact_response = "КЛАСС: устарело\nПРИЧИНА: функциональность удалена"
+    data = client.post("/api/impact", json={"change_description": "Удалили выгрузку отчётов"}).json()
+    assert all(item["action"] == "устарело" for item in data["documents"])
+    assert data["summary"]["by_action"] == {"устарело": len(data["documents"])}
+
+
+def test_impact_requires_index(client):
+    response = client.post("/api/impact", json={"change_description": "что-то"})
+    assert response.status_code == 400
+
+
+def test_impact_respects_product_isolation(client):
+    add_second_product(client)
+    client.post("/api/reindex", params={"product": "beta"})
+    data = client.post(
+        "/api/impact",
+        json={"change_description": "изменение в бете"},
+        params={"product": "beta"},
+    ).json()
+    assert all(item["path"] == "beta-api.md" for item in data["documents"])
