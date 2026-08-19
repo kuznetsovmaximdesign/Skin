@@ -69,7 +69,8 @@ def live_server(tmp_path):
     ollama = FakeOllama().start()
     ollama.chunk_delay = 0.15  # чтобы поток был виден в браузере, а не мгновенным
     shutil.copytree(REPO_ROOT / "data" / "docs", tmp_path / "docs")
-    shutil.copy(REPO_ROOT / "data" / "styleguide.md", tmp_path / "styleguide.md")
+    for name in ("styleguide.md", "style-rules.yaml", "template.schema.yaml", "glossary.yaml"):
+        shutil.copy(REPO_ROOT / "data" / name, tmp_path / name)
     config = tmp_path / "config.yaml"
     config.write_text(
         f"""ollama:
@@ -80,10 +81,29 @@ def live_server(tmp_path):
 paths:
   docs_dir: "{tmp_path}/docs"
   style_guide: "{tmp_path}/styleguide.md"
+  style_guides: ["{tmp_path}/styleguide.md"]
+  samples_dir: "{tmp_path}/samples"
+  derived_guide: "{tmp_path}/derived-guide.md"
   index_file: "{tmp_path}/index.sqlite3"
   output_dir: "{tmp_path}/output"
+  changesets_dir: "{tmp_path}/changesets"
+  feedback_log: "{tmp_path}/feedback.jsonl"
 search: {{top_k: 5, chunk_max_chars: 1800}}
 generation: {{temperature: 0.2, num_ctx: 8192}}
+languages:
+  source: "ru"
+  targets: ["en", "kk"]
+  low_resource: ["kk"]
+  layout: "folder"
+  glossary: "{tmp_path}/glossary.yaml"
+checks:
+  prose_rules: "{tmp_path}/style-rules.yaml"
+  template_schema: "{tmp_path}/template.schema.yaml"
+  docs_config_dir: "{REPO_ROOT.parent}/docs-config"
+  use_vale: false
+  use_markdownlint: false
+security:
+  audit_log: "{tmp_path}/audit.jsonl"
 """,
         encoding="utf-8",
     )
@@ -274,9 +294,39 @@ def test_full_flow_in_browser(live_server):
         )
         assert "120 минут" in page.input_value("#result-view")
 
+        # панель правил портала: типы, профили, KDOC и глоссарий
+        assert "Типы статей" in page.inner_text("#portal-rules-body")
+        assert page.eval_on_selector_all("#portal-rules-body .rules__item", "els => els.length") > 10
+        page.click("#sync-glossary")
+        page.wait_for_selector("#overlay", state="hidden", timeout=60000)
+
+        # новая статья по шаблону
+        page.fill("#article-title", "Настройка уведомлений")
+        page.fill("#article-requirements", "Уведомления отправляются на почту администратора.")
+        previous_file = page.inner_text("#result-file")
+        page.click("#create-article")
+        page.wait_for_function(
+            "(previous) => document.querySelector('#result-file').textContent !== previous",
+            arg=previous_file,
+            timeout=120000,
+        )
+        assert "Настройка уведомлений" in page.input_value("#result-view")
+
+        # каскад на языковые версии
+        page.click("#cascade")
+        page.wait_for_selector(".cascade__row", timeout=120000)
+        languages_shown = page.eval_on_selector_all(".cascade__lang", "els => els.map(e => e.textContent.trim())")
+        assert {item.lower() for item in languages_shown} == {"en", "kk"}
+        assert "вычитка" in page.inner_text("#cascade-list")
+
+        # публикация: без настроек площадок ничего не уходит
+        page.click("#publish")
+        page.wait_for_selector("#publish-box:not([hidden])", timeout=60000)
+        assert "выключена" in page.inner_text("#publish-box")
+
         # сохранённые результаты видны на странице (список обновляется после генерации)
         page.wait_for_function(
-            "() => document.querySelectorAll('.result-row').length >= 4", timeout=30000
+            "() => document.querySelectorAll('.result-row').length >= 5", timeout=30000
         )
         rows = page.inner_text("#results-list")
         assert "api-auth.md" in rows

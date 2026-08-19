@@ -125,6 +125,19 @@ const Api = (() => {
     },
 
     review: (content) => post('/api/review', { content }),
+
+    newArticle: (body) => post('/api/article/new', body),
+    languageVersions: (docPath) => request('/api/languages?doc_path=' + encodeURIComponent(docPath)),
+    cascade: (docPath, content, targets) =>
+      post('/api/cascade', { doc_path: docPath, content: content || null, targets: targets || null }),
+
+    publishPreview: (body) => post('/api/publish/preview', body),
+    publish: (body) => post('/api/publish', body),
+    publications: () => request('/api/publications'),
+
+    docsConfig: () => request('/api/docs-config'),
+    syncGlossary: () => post('/api/docs-config/sync-glossary'),
+    crosslocale: () => request('/api/crosslocale'),
     saveResult: (docPath, resultFile, content) =>
       post('/api/results/save', { doc_path: docPath, result_file: resultFile, content }),
     results: () => request('/api/results'),

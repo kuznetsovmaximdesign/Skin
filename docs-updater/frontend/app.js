@@ -256,6 +256,7 @@ async function reloadEverything() {
   await loadGuide();
   await loadStyleSources();
   await loadSamples();
+  await loadPortalRules();
   await loadResults();
 }
 
@@ -334,6 +335,204 @@ $('check-drift').addEventListener('click', async () => {
   busy('Проверяем ссылки, значения и пометки…');
   try {
     renderDrift(await Api.drift($('change-text').value.trim()));
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+
+/* ---------- правила портала, новая статья, каскад и публикация ---------- */
+
+function renderPortalRules(data) {
+  const box = $('portal-rules-body');
+  $('portal-rules-info').textContent = data.errors.length
+    ? 'Проблемы с файлами: ' + data.errors.join('; ')
+    : `Папка: ${data.dir}`;
+
+  const types = data.types.map((item) => `
+    <span class="rules__item" title="${escapeHtml(item.profiles.join(', '))}">
+      ${escapeHtml(item.name)}${item.lintable ? '' : ' · без текстовой проверки'}
+    </span>`).join('');
+
+  const kdoc = data.kdoc.map((rule) => {
+    const state = rule.enabled === false ? 'off' : rule.severity;
+    const scope = [...(rule.types || []), ...(rule.profiles || [])].join(', ');
+    return `<span class="rules__item rules__item--${escapeHtml(state)}"
+      title="${escapeHtml(rule.description || '')}">${escapeHtml(rule.id)}${scope ? ' · ' + escapeHtml(scope) : ''}</span>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="rules__group">
+      <div class="rules__title">Типы статей (${data.types.length})</div>
+      <div class="rules__items">${types || '<span class="muted">не заданы</span>'}</div>
+    </div>
+    <div class="rules__group">
+      <div class="rules__title">Профили шаблона</div>
+      <div class="rules__items">${data.profiles.map((item) =>
+        `<span class="rules__item">${escapeHtml(item)}</span>`).join('')}</div>
+    </div>
+    <div class="rules__group">
+      <div class="rules__title">Кастомные правила (${data.kdoc.length})</div>
+      <div class="rules__items">${kdoc || '<span class="muted">не заданы</span>'}</div>
+    </div>
+    <div class="rules__group">
+      <div class="rules__title">Глоссарий</div>
+      <div class="rules__items">
+        <span class="rules__item">терминов: ${data.glossary.terms}</span>
+        <span class="rules__item">замен: ${data.glossary.substitutions}</span>
+        <span class="rules__item">не переводить: ${escapeHtml(
+          (data.glossary.do_not_translate || []).join(', ') || '—')}</span>
+      </div>
+    </div>`;
+
+  // Списки типов и профилей нужны форме новой статьи.
+  $('article-type').innerHTML = '<option value="">определить по структуре</option>' +
+    data.types.map((item) => `<option value="${escapeHtml(item.type_id)}">${escapeHtml(item.name)}</option>`).join('');
+  $('article-profile').innerHTML = data.profiles
+    .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+}
+
+async function loadPortalRules() {
+  renderPortalRules(await Api.docsConfig());
+}
+
+$('sync-glossary').addEventListener('click', async () => {
+  busy('Собираем словарь Vale из глоссария…');
+  try {
+    const data = await Api.syncGlossary();
+    toast(`Словарь собран: принятых написаний ${data.accepted}, запрещённых ${data.rejected}`);
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('check-locales').addEventListener('click', async () => {
+  busy('Сверяем языковые версии…');
+  try {
+    const data = await Api.crosslocale();
+    const box = $('locales-list');
+    box.hidden = false;
+    if (!data.findings.length) {
+      box.innerHTML = `<p class="muted">Расхождений нет. Статей со связкой по article_id: ${data.summary.articles}.</p>`;
+    } else {
+      box.innerHTML = `<div class="review__title">Расхождения между локалями: ${data.findings.length}</div>` +
+        data.findings.slice(0, 40).map((item) => `
+          <div class="drift__row">
+            <div>${escapeHtml(item.message)}</div>
+            <div><span class="tag tag--warning">${escapeHtml(item.kind)}</span></div>
+            <div class="drift__where mono">${escapeHtml(item.path)} · ${escapeHtml(item.article_id)}</div>
+          </div>`).join('');
+    }
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('create-article').addEventListener('click', async () => {
+  const title = $('article-title').value.trim();
+  const requirements = $('article-requirements').value.trim();
+  if (!title) { toast('Введите название статьи', true); return; }
+  if (!requirements) { toast('Опишите требования к функционалу', true); return; }
+
+  busy('Собираем черновик по разделам шаблона…');
+  try {
+    const data = await Api.newArticle({
+      title,
+      requirements,
+      type_id: $('article-type').value || null,
+      profile: $('article-profile').value || null,
+      use_examples: $('article-examples').checked,
+    });
+
+    // Черновик показываем в том же блоке результата: diff считается от пустого документа.
+    state.result = {
+      doc_path: data.result_file,
+      result_file: data.result_file,
+      result_path: data.result_path,
+      updated: data.text,
+      original: '',
+    };
+    $('step-diff').hidden = false;
+    $('result-view').value = data.text;
+    $('result-file').textContent = data.result_path;
+    renderChecks(data.checks);
+    renderWarnings([]);
+    countMarks(data.text);
+    setResultButtons(true);
+    showTab('result');
+    $('step-diff').scrollIntoView({ behavior: 'smooth' });
+    await loadResults();
+    toast(`Черновик готов: тип «${data.type_id || 'не определён'}», разделов ${data.sections.length}`);
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('cascade').addEventListener('click', async () => {
+  if (!state.result) return;
+  busy('Переносим статью на другие языки. Это самый долгий шаг.');
+  try {
+    const data = await Api.cascade(state.result.doc_path, $('result-view').value);
+    const box = $('cascade-list');
+    box.hidden = false;
+    box.innerHTML = `<div class="review__title">Языковые версии: ${data.summary.translated} из ${data.summary.total},
+        требуют вычитки: ${data.summary.needs_review}</div>` +
+      data.results.map((item) => `
+        <div class="cascade__row">
+          <span class="cascade__lang">${escapeHtml(item.language)}</span>
+          <span class="cascade__note">${escapeHtml(item.reason || 'готово')}</span>
+          ${item.file
+            ? `<a href="${Api.downloadUrl(item.file)}">скачать</a>`
+            : '<span class="muted">—</span>'}
+        </div>`).join('');
+    await loadResults();
+    toast(`Переведено версий: ${data.summary.translated}. Требуют вычитки: ${data.summary.needs_review}`);
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('publish').addEventListener('click', async () => {
+  if (!state.result) return;
+  busy('Готовим превью публикации…');
+  try {
+    const preview = await Api.publishPreview({
+      doc_path: state.result.doc_path,
+      result_file: state.result.result_file,
+    });
+    const box = $('publish-box');
+    box.hidden = false;
+
+    if (!preview.outbound.allowed) {
+      box.innerHTML = `<div class="publish__blocked">Публиковать нельзя: ${
+        escapeHtml(preview.outbound.reasons.join('; '))}</div>`;
+      idle();
+      return;
+    }
+    if (!preview.enabled) {
+      box.innerHTML = '<div class="publish__blocked">Публикация выключена в настройках '
+        + '(publish.enabled в config.yaml).</div>';
+      idle();
+      return;
+    }
+
+    box.innerHTML = `<div class="review__title">Куда уйдёт «${escapeHtml(preview.title)}»</div>` +
+      preview.targets.map((item) => `
+        <div class="publish__row">
+          <span>${escapeHtml(item.target)} · ${escapeHtml(item.base_url)}</span>
+          <span>${escapeHtml(item.action)}${item.existing_id ? ' · ' + escapeHtml(item.existing_id) : ''}</span>
+        </div>`).join('') +
+      '<div class="row"><button class="btn btn--primary" id="publish-confirm">Подтвердить публикацию</button>'
+      + '<span class="muted">Без подтверждения ничего не отправляется.</span></div>';
+
+    $('publish-confirm').addEventListener('click', async () => {
+      busy('Публикуем…');
+      try {
+        const result = await Api.publish({
+          doc_path: state.result.doc_path,
+          result_file: state.result.result_file,
+          confirm: true,
+        });
+        box.innerHTML = `<div class="review__title">Опубликовано: ${result.summary.published}</div>` +
+          result.results.map((item) => `
+            <div class="publish__row">
+              <span>${escapeHtml(item.target)}</span>
+              <span>${item.ok ? escapeHtml(item.action) + ' · ' + escapeHtml(String(item.id))
+                : 'ошибка: ' + escapeHtml(item.error || '')}</span>
+            </div>`).join('');
+        toast(`Опубликовано площадок: ${result.summary.published}`);
+      } catch (error) { showError(error); } finally { idle(); }
+    });
   } catch (error) { showError(error); } finally { idle(); }
 });
 
@@ -746,7 +945,9 @@ $('manual-doc').addEventListener('change', (event) => {
 });
 
 function setResultButtons(enabled) {
-  ['save-edits', 'download', 'apply', 'review'].forEach((id) => { $(id).disabled = !enabled; });
+  ['save-edits', 'download', 'apply', 'review', 'cascade', 'publish'].forEach((id) => {
+    $(id).disabled = !enabled;
+  });
 }
 
 function showTab(view) {
@@ -795,6 +996,8 @@ async function generateStreaming(body) {
       setResultButtons(false);
       $('review-notes').hidden = true;
       $('checks-notes').hidden = true;
+      $('cascade-list').hidden = true;
+      $('publish-box').hidden = true;
       $('changeset').hidden = true;
       showTab('result');
       $('step-diff').scrollIntoView({ behavior: 'smooth' });
@@ -931,6 +1134,7 @@ $('apply').addEventListener('click', async () => {
     await loadGuide();
     await loadStyleSources();
     await loadSamples();
+    await loadPortalRules();
     await loadResults();
   } catch (error) { showError(error); }
 })();

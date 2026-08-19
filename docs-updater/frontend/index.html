@@ -99,6 +99,23 @@
     </details>
   </section>
 
+  <!-- Правила портала -->
+  <section class="card" id="portal-rules">
+    <div class="card__head">
+      <span class="step">✓</span>
+      <h2>Правила портала</h2>
+    </div>
+    <p class="muted">Типы статей, кастомные правила и глоссарий читаются из папки
+      <code>docs-config/</code>. Изменили файл — изменились правила.</p>
+    <div class="row">
+      <button class="btn" id="sync-glossary">Собрать словарь Vale из глоссария</button>
+      <button class="btn" id="check-locales">Сверить языковые версии</button>
+      <span class="muted" id="portal-rules-info"></span>
+    </div>
+    <div id="portal-rules-body" class="rules"></div>
+    <div id="locales-list" class="drift" hidden></div>
+  </section>
+
   <!-- Шаг 3 -->
   <section class="card" id="step-search">
     <div class="card__head">
@@ -160,10 +177,14 @@
         </div>
         <button class="btn" id="review">Проверить по гайду</button>
         <button class="btn" id="download">Скачать обновлённый .md</button>
+        <button class="btn" id="cascade">Перевести на другие языки</button>
+        <button class="btn" id="publish">Опубликовать…</button>
         <button class="btn btn--danger" id="apply">Заменить оригинал</button>
       </div>
     </div>
     <div id="diff-view" class="diff"></div>
+    <div id="cascade-list" class="cascade" hidden></div>
+    <div id="publish-box" class="publish" hidden></div>
     <div id="checks-notes" class="review review--checks" hidden></div>
     <div id="review-notes" class="review" hidden></div>
     <div id="preview-pane" hidden>
@@ -182,6 +203,33 @@
     </div>
     <p class="hint">Оригинал не меняется. Результат сохранён отдельным файлом: <span id="result-file" class="mono"></span>. Кнопка «Заменить оригинал» делает копию исходного файла с расширением <code>.bak-…</code>.</p>
   </section>
+  <!-- Новая статья -->
+  <section class="card" id="new-article">
+    <div class="card__head">
+      <span class="step">+</span>
+      <h2>Новая статья по шаблону</h2>
+    </div>
+    <p class="muted">Разделы берутся из шаблона выбранного типа. Факты — только из требований,
+      где данных нет, будет пометка [уточнить].</p>
+    <div class="grid">
+      <label>Название статьи
+        <input type="text" id="article-title" placeholder="Настройка вебхуков">
+      </label>
+      <label>Тип статьи
+        <select id="article-type"><option value="">определить по структуре</option></select>
+      </label>
+      <label>Профиль шаблона
+        <select id="article-profile"></select>
+      </label>
+    </div>
+    <textarea id="article-requirements" rows="6"
+      placeholder="Технические требования к функционалу: что делает, какие ограничения, для кого…"></textarea>
+    <div class="row">
+      <button class="btn btn--primary" id="create-article">Собрать черновик</button>
+      <label class="check"><input type="checkbox" id="article-examples" checked> брать тон из похожей статьи</label>
+    </div>
+  </section>
+
   <!-- Сохранённые результаты -->
   <section class="card" id="step-results">
     <div class="card__head">

@@ -1,0 +1,19 @@
+extends: substitution
+message: Вместо «%s» пишем «%s» (глоссарий).
+level: error
+ignorecase: true
+swap:
+  кума: KUMA
+  Kuma: KUMA
+  Company Account: Kaspersky CompanyAccount
+  компани аккаунт: Kaspersky CompanyAccount
+  ключ доступа: токен доступа
+  access-ключ: токен доступа
+  эндпойнт: эндпоинт
+  endpoint: эндпоинт
+  web-интерфейс: веб-интерфейс
+  вебинтерфейс: веб-интерфейс
+  correlator: коррелятор
+  полиси: политика
+  аккаунт: учётная запись
+  юзер: учётная запись

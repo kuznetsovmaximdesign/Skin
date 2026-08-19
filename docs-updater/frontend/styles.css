@@ -140,6 +140,29 @@ del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 
 .format-status--none { color: var(--muted); }
 details summary { cursor: pointer; font-size: 13.5px; color: var(--accent); margin-top: 10px; }
 
+.rules { margin-top: 12px; display: grid; gap: 10px; }
+.rules__group { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.rules__title { font-weight: 600; font-size: 13.5px; margin-bottom: 6px; }
+.rules__items { display: flex; flex-wrap: wrap; gap: 6px; }
+.rules__item {
+  font-size: 12.5px; padding: 2px 8px; border-radius: 999px; background: #eef1f5; color: var(--muted);
+}
+.rules__item--error { background: #fdecea; color: var(--danger); }
+.rules__item--warning { background: #fff6e8; color: var(--warn); }
+.rules__item--off { text-decoration: line-through; }
+
+.cascade { margin-top: 14px; display: grid; gap: 8px; }
+.cascade__row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px;
+}
+.cascade__lang { font-weight: 600; text-transform: uppercase; }
+.cascade__note { color: var(--muted); font-size: 12.5px; }
+
+.publish { margin-top: 14px; padding: 14px 16px; border: 1px solid #cfe0f5; background: #f5f9ff; border-radius: 10px; }
+.publish__row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13.5px; }
+.publish__blocked { color: var(--danger); font-size: 13.5px; }
+
 .changeset { margin-top: 16px; display: grid; gap: 12px; }
 .edit {
   border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: #fff;

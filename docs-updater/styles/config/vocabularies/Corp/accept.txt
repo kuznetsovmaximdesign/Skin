@@ -1,9 +1,16 @@
-Ollama
-Markdown
-SQLite
-FastAPI
-вебхук
-вебхуки
-токен
+API
+CSV
+GET
+HTTP
+JSON
+KUMA
+Kaspersky CompanyAccount
+POST
+URL
+XLSX
+веб-интерфейс
+коррелятор
+политика
+токен доступа
+учётная запись
 эндпоинт
-коллектор
