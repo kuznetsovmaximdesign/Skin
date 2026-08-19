@@ -2016,3 +2016,98 @@ def test_check_endpoint_reports_profile_and_type(client):
     assert data["document"]["type_id"] == "howto_procedure"
     assert data["summary"]["violations"] == 0
     assert "recommendations" in data["summary"]
+
+
+# --- глоссарий в словарь Vale и кросс-локальная сверка ----------------------
+
+
+def test_glossary_becomes_vale_vocabulary(client):
+    data = client.post("/api/docs-config/sync-glossary").json()
+    assert data["ok"] is True
+    assert data["accepted"] > 0 and data["rejected"] > 0
+    assert "KUMA" in data["do_not_translate"]
+
+    written = {Path(item).name: Path(item) for item in data["written"]}
+    accept = written["accept.txt"].read_text(encoding="utf-8")
+    reject = written["reject.txt"].read_text(encoding="utf-8")
+    substitutions = yaml.safe_load(written["GlossarySubstitutions.yml"].read_text(encoding="utf-8"))
+
+    assert "KUMA" in accept and "эндпоинт" in accept
+    assert "эндпойнт" in reject                      # так писать нельзя
+    assert substitutions["swap"]["эндпойнт"] == "эндпоинт"
+    assert substitutions["extends"] == "substitution"
+
+
+def test_do_not_translate_terms_are_kept_out_of_translation_pairs(client):
+    from backend import glossary_sync
+
+    config = config_module.load_config()
+    pairs = glossary_sync.translation_pairs(config, "en")
+    assert "KUMA" not in pairs                       # продуктовое имя не переводим
+    assert pairs.get("токен доступа") == "access token"
+    assert "KUMA" in glossary_sync.keep_as_is(config)
+
+
+def make_locale_versions(client, *, same_structure=True, same_date=True) -> None:
+    """Русская и английская версии одной статьи (article_id совпадает)."""
+    docs = client.tmp_path / "docs"
+    (docs / "ru").mkdir(parents=True, exist_ok=True)
+    (docs / "en").mkdir(parents=True, exist_ok=True)
+
+    (docs / "ru" / "webhooks.md").write_text(
+        "# Вебхуки\n\n## Назначение\n\nТекст.\n\n## Ограничения\n\n- Пять вебхуков.\n\n"
+        "Идентификатор статьи: DOC-7001. Дата обновления: 2026-08-19.\n",
+        encoding="utf-8",
+    )
+    english = "# Webhooks\n\n## Purpose\n\nText.\n"
+    if same_structure:
+        english += "\n## Limitations\n\n- Five webhooks.\n"
+    english += (
+        "\nArticle ID: DOC-7001. Last updated: "
+        + ("2026-08-19" if same_date else "2026-07-01")
+        + ".\n"
+    )
+    (docs / "en" / "webhooks.md").write_text(english, encoding="utf-8")
+
+
+def test_crosslocale_checks_structure_and_dates_separately(client):
+    make_locale_versions(client, same_structure=True, same_date=False)
+    data = client.get("/api/crosslocale").json()
+
+    article = next(item for item in data["articles"] if item["article_id"] == "DOC-7001")
+    assert article["languages"] == ["en", "ru"]
+    assert article["structure_equal"] is True        # структура совпала…
+    assert article["dates_equal"] is False           # …но обновляли версии в разное время
+    kinds = {item["kind"] for item in data["findings"] if item["article_id"] == "DOC-7001"}
+    assert kinds == {"date-mismatch"}
+
+
+def test_crosslocale_finds_structure_mismatch(client):
+    make_locale_versions(client, same_structure=False, same_date=True)
+    data = client.get("/api/crosslocale").json()
+    kinds = {item["kind"] for item in data["findings"] if item["article_id"] == "DOC-7001"}
+    assert "structure-mismatch" in kinds
+    assert "date-mismatch" not in kinds              # даты совпадают — про них молчим
+
+
+def test_missing_locale_is_reported_only_when_required(client):
+    make_locale_versions(client)
+    assert not [item for item in client.get("/api/crosslocale").json()["findings"]
+                if item["kind"] == "missing-locale"]
+
+    config_path = client.tmp_path / "config.yaml"
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["languages"]["require_all_targets"] = True
+    config_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    missing = [item for item in client.get("/api/crosslocale").json()["findings"]
+               if item["kind"] == "missing-locale"]
+    assert missing and "kk" in missing[0]["message"]
+
+
+def test_crosslocale_findings_appear_in_drift(client):
+    make_locale_versions(client, same_structure=False, same_date=False)
+    data = client.post("/api/drift", json={}).json()
+    kinds = set(data["summary"]["by_kind"])
+    assert "structure-mismatch" in kinds
+    assert "date-mismatch" in kinds

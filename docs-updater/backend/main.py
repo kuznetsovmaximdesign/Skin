@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import changeset as changeset_module
-from . import article, checks, docmap, docs_config, drift, impact, indexer, languages
+from . import article, checks, crosslocale, docmap, docs_config, drift, glossary_sync
+from . import impact, indexer, languages
 from . import search, sections
 from . import publish, security, style
 from .checks import prose as prose_rules
@@ -1068,12 +1069,25 @@ def drift_endpoint(payload: DriftRequest, product: str | None = None) -> dict[st
     settings = checks.checks_config(config)
     rules = prose_rules.load_rules(config, settings)
     glossary = {**(rules.get("glossary") or {}), **(rules.get("substitutions") or {})}
-    return drift.scan(
+    result = drift.scan(
         docs_dir,
         description=payload.change_description,
         only_doc=payload.doc_path,
         glossary=glossary,
     )
+
+    # Расхождения между языковыми версиями — часть той же картины «на что посмотреть».
+    if not payload.doc_path:
+        locale_findings = crosslocale.as_drift_findings(config)
+        result["findings"] = sorted(
+            result["findings"] + locale_findings, key=lambda item: (item["doc_path"], item["line"])
+        )
+        result["summary"]["total"] = len(result["findings"])
+        result["summary"]["by_kind"] = {
+            kind: sum(1 for item in result["findings"] if item["kind"] == kind)
+            for kind in sorted({item["kind"] for item in result["findings"]})
+        }
+    return result
 
 
 @app.post("/api/check")
@@ -1086,6 +1100,22 @@ def check_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[s
         "violations": [item.as_dict() for item in violations],
         "summary": checks.summarize(violations),
     }
+
+
+@app.post("/api/docs-config/sync-glossary")
+def sync_glossary(product: str | None = None) -> dict[str, Any]:
+    """Пересобирает словари Vale из glossary.csv: принятые написания, замены, «не переводить»."""
+    config = load_config_for(product)
+    result = glossary_sync.sync(config)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/crosslocale")
+def crosslocale_endpoint(product: str | None = None) -> dict[str, Any]:
+    """Сверка языковых версий по article_id: структура и даты — раздельно."""
+    return crosslocale.compare(load_config_for(product))
 
 
 @app.get("/api/docs-config")

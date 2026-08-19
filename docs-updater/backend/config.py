@@ -55,6 +55,7 @@ DEFAULTS: dict[str, Any] = {
         "layout": "folder",
         "low_resource": [],
         "glossary": "data/glossary.yaml",
+        "require_all_targets": False,
     },
     "publish": {
         "enabled": False,
