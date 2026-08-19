@@ -128,6 +128,50 @@ ins { background: #b7ebc7; color: var(--add-text); text-decoration: none; border
 del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 0 2px; }
 .diff__equal { opacity: .62; }
 
+/* --- превью документа с подсветкой --- */
+.preview {
+  margin-top: 14px; padding: 26px 30px; background: #fff; border: 1px solid var(--line);
+  border-radius: 10px; font-size: 15px; line-height: 1.65; max-width: 780px;
+}
+.preview__h { margin: 22px 0 10px; line-height: 1.3; }
+.preview__h:first-child { margin-top: 0; }
+.preview__h--1 { font-size: 25px; }
+.preview__h--2 { font-size: 20px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.preview__h--3 { font-size: 17px; }
+.preview__h--4, .preview__h--5, .preview__h--6 { font-size: 15px; }
+.preview__p { margin: 0 0 12px; }
+.preview__list { margin: 0 0 12px; padding-left: 22px; }
+.preview__list li { margin-bottom: 4px; }
+.preview__quote {
+  margin: 0 0 12px; padding: 6px 14px; border-left: 3px solid var(--line); color: var(--muted);
+}
+.preview__code {
+  margin: 0 0 12px; padding: 12px 14px; background: #f6f7f9; border-radius: 8px; overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+}
+.preview code {
+  background: #f0f2f5; padding: 1px 4px; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+}
+.preview__code code { background: none; padding: 0; }
+.preview__tablewrap { overflow-x: auto; margin-bottom: 12px; }
+.preview__table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.preview__table th, .preview__table td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; }
+.preview__table th { background: #f6f7f9; }
+.preview__ins {
+  background: #d6f2e0; color: inherit; text-decoration: none; border-radius: 3px;
+  padding: 1px 3px; box-shadow: 0 0 0 1px rgba(21,101,60,.12);
+}
+.preview__removed {
+  margin: 0 0 12px; padding: 8px 12px; background: var(--del-bg); border-radius: 8px;
+  color: var(--del-text); font-size: 14px;
+}
+.preview__label {
+  display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin-bottom: 3px;
+}
+.preview a { color: var(--accent); }
+
 .result {
   margin-top: 14px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 10px;
   width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

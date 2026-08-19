@@ -256,6 +256,103 @@ function countMarks(text) {
   return unclear + disputed;
 }
 
+
+/* ---------- превью документа с подсветкой изменений ---------- */
+
+/* Служебные символы отмечают новый текст: они переживают разметку Markdown
+   и в самом конце превращаются в теги подсветки. */
+const MARK_OPEN = String.fromCharCode(1);
+const MARK_CLOSE = String.fromCharCode(2);
+
+function markedText(parts, marked) {
+  return parts
+    .filter((part) => part.type !== (marked === 'added' ? 'removed' : 'added'))
+    .map((part) => (part.type === marked ? MARK_OPEN + part.text + MARK_CLOSE : part.text))
+    .join('');
+}
+
+function inlineMarkdown(text) {
+  return text
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" rel="noreferrer">$1</a>');
+}
+
+/* Небольшой конвертер Markdown → HTML: заголовки, списки, код, цитаты, таблицы.
+   Никаких библиотек — всё локально и без обращений в сеть. */
+function renderMarkdownBlock(raw) {
+  const text = escapeHtml(raw);
+  const lines = text.split('\n');
+
+  if (lines[0].trimStart().startsWith('```')) {
+    const last = lines[lines.length - 1].trimStart().startsWith('```') ? -1 : lines.length;
+    return `<pre class="preview__code"><code>${lines.slice(1, last).join('\n')}</code></pre>`;
+  }
+
+  if (lines.length > 1 && lines.every((line) => line.trim().startsWith('|'))) {
+    const rows = lines
+      .filter((line) => !/^\s*\|[\s:|-]+\|\s*$/.test(line))
+      .map((line) => line.trim().replace(/^\||\|$/g, '').split('|'));
+    const [head, ...body] = rows;
+    return `<div class="preview__tablewrap"><table class="preview__table">
+      <thead><tr>${head.map((cell) => `<th>${inlineMarkdown(cell.trim())}</th>`).join('')}</tr></thead>
+      <tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${inlineMarkdown(cell.trim())}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (lines.every((line) => /^\s*[-*+]\s+/.test(line) || line.trim() === '')) {
+    const items = lines.filter((line) => line.trim()).map((line) => line.replace(/^\s*[-*+]\s+/, ''));
+    return `<ul class="preview__list">${items.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`;
+  }
+
+  if (lines.every((line) => /^\s*\d+[.)]\s+/.test(line) || line.trim() === '')) {
+    const items = lines.filter((line) => line.trim()).map((line) => line.replace(/^\s*\d+[.)]\s+/, ''));
+    return `<ol class="preview__list">${items.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ol>`;
+  }
+
+  if (lines.every((line) => line.trimStart().startsWith('>') || line.trim() === '')) {
+    const body = lines.map((line) => line.replace(/^\s*>\s?/, '')).join('<br>');
+    return `<blockquote class="preview__quote">${inlineMarkdown(body)}</blockquote>`;
+  }
+
+  const rendered = lines.map((line) => {
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (!heading) return inlineMarkdown(line);
+    const level = Math.min(6, heading[1].length);
+    return `<h${level} class="preview__h preview__h--${level}">${inlineMarkdown(heading[2])}</h${level}>`;
+  });
+  const onlyHeadings = rendered.every((line) => line.startsWith('<h'));
+  return onlyHeadings ? rendered.join('') : `<p class="preview__p">${rendered.join('<br>')}</p>`;
+}
+
+function applyMarks(html) {
+  return html
+    .split(MARK_OPEN).join('<ins class="preview__ins">')
+    .split(MARK_CLOSE).join('</ins>');
+}
+
+function renderPreview(diff) {
+  const showRemoved = $('show-removed').checked;
+  const html = diff.blocks.map((block) => {
+    if (block.type === 'equal') {
+      return renderMarkdownBlock(block.new);
+    }
+    if (block.type === 'insert') {
+      return applyMarks(renderMarkdownBlock(MARK_OPEN + block.new + MARK_CLOSE));
+    }
+    if (block.type === 'delete') {
+      if (!showRemoved) return '';
+      return `<div class="preview__removed"><span class="preview__label">удалено</span>
+        <del>${escapeHtml(block.old)}</del></div>`;
+    }
+    const parts = (block.inline && block.inline.new) || [{ type: 'same', text: block.new }];
+    return applyMarks(renderMarkdownBlock(markedText(parts, 'added')));
+  }).join('');
+
+  $('preview-view').innerHTML = html || '<p class="muted">Документ пуст.</p>';
+}
+
 function renderWarnings(warnings) {
   $('warnings').innerHTML = (warnings || [])
     .map((text) => `<div class="warning">${escapeHtml(text)}</div>`).join('');
@@ -342,13 +439,15 @@ function showTab(view) {
     tab.classList.toggle('tab--active', tab.dataset.view === view);
   });
   $('result-pane').hidden = view !== 'result';
-  $('diff-view').hidden = view === 'result';
+  $('preview-pane').hidden = view !== 'preview';
+  $('diff-view').hidden = view !== 'diff';
 }
 
 function finishResult(data) {
   state.result = data;
   renderWarnings((data.warnings || []).concat(data.style_guide_used ? [] : ['Гайд по стилю пуст — правки сделаны без него.']));
   renderDiff(data.diff);
+  renderPreview(data.diff);
   $('result-view').value = data.updated;
   countMarks(data.updated);
   $('result-file').textContent = data.result_path;
@@ -461,6 +560,10 @@ $('generate').addEventListener('click', async () => {
   }
 });
 
+$('show-removed').addEventListener('change', () => {
+  if (state.result) renderPreview(state.result.diff);
+});
+
 $('only-changes').addEventListener('change', (event) => {
   $('diff-view').classList.toggle('diff--only-changes', event.target.checked);
 });
@@ -480,6 +583,7 @@ $('save-edits').addEventListener('click', async () => {
     });
     state.result = { ...state.result, updated: data.updated, diff: data.diff };
     renderDiff(data.diff);
+    renderPreview(data.diff);
     renderWarnings(data.warnings);
     countMarks(data.updated);
     await loadResults();

@@ -38,11 +38,18 @@ def find_chromium() -> str | None:
     return shutil.which("chromium") or shutil.which("google-chrome")
 
 
-def wait_generation_done(page, timeout: int = 120000) -> None:
-    """Ждём конца генерации: diff посчитан и кнопки результата снова активны."""
+def generate_and_wait(page, timeout: int = 120000) -> None:
+    """Запускает генерацию и ждёт именно её конца: новый файл результата и активные кнопки."""
+    previous = page.inner_text("#result-file")
+    page.click("#generate")
     page.wait_for_function(
-        "() => document.querySelector('#diff-stats').textContent.includes('Изменено')"
-        " && !document.querySelector('#download').disabled",
+        """(previous) => {
+            const file = document.querySelector('#result-file').textContent;
+            const stats = document.querySelector('#diff-stats').textContent;
+            return file && file !== previous && stats.includes('Изменено')
+                && !document.querySelector('#download').disabled;
+        }""",
+        arg=previous,
         timeout=timeout,
     )
 
@@ -148,12 +155,18 @@ def test_full_flow_in_browser(live_server):
         assert any("Срок жизни токена" in option for option in options)
 
         # Шаг 4-5: обновление. Текст появляется потоком, ещё до готового diff
+        previous_file = page.inner_text("#result-file")
         page.click("#generate")
         page.wait_for_function(
             "() => document.querySelector('#result-view').value.length > 0", timeout=60000
         )
         assert "модель пишет" in page.inner_text("#marks-info")
-        wait_generation_done(page)
+        page.wait_for_function(
+            "(previous) => document.querySelector('#result-file').textContent !== previous"
+            " && !document.querySelector('#download').disabled",
+            arg=previous_file,
+            timeout=120000,
+        )
         assert page.eval_on_selector_all("ins", "e => e.length") >= 1
         assert page.eval_on_selector_all("del", "e => e.length") >= 1
         assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
@@ -175,13 +188,34 @@ def test_full_flow_in_browser(live_server):
 
         # правка одного раздела: выбираем раздел и обновляем только его
         page.select_option("#section-select", label="— Срок жизни токена")
-        page.click("#generate")
-        wait_generation_done(page)
+        generate_and_wait(page)
         assert "Изменено абзацев: 1" in page.inner_text("#diff-stats")
+
+        # превью: документ в читаемом виде, новое подсвечено
+        page.click(".tab[data-view='preview']")
+        preview = page.inner_text("#preview-view")
+        assert "Авторизация в API" in preview
+        assert "#" not in preview  # разметка отрисована, а не показана как текст
+        assert page.eval_on_selector_all("#preview-view h2", "els => els.length") >= 4
+        highlighted = page.eval_on_selector_all("#preview-view ins", "els => els.map(e => e.textContent)")
+        assert any("120" in text for text in highlighted)
+
+        # удалённые куски показываются только по галочке
+        live_server["ollama"].generate_response = (
+            "# Авторизация в API\n\n## Назначение\n\n"
+            "Документ описывает, как получить токен доступа и использовать его в запросах к публичному API."
+        )
+        page.select_option("#section-select", index=0)
+        generate_and_wait(page)
+        page.click(".tab[data-view='preview']")
+        assert page.eval_on_selector_all(".preview__removed", "els => els.length") == 0
+        page.check("#show-removed")
+        assert page.eval_on_selector_all(".preview__removed", "els => els.length") > 0
+        page.uncheck("#show-removed")
 
         # сохранённые результаты видны на странице (список обновляется после генерации)
         page.wait_for_function(
-            "() => document.querySelectorAll('.result-row').length >= 2", timeout=30000
+            "() => document.querySelectorAll('.result-row').length >= 3", timeout=30000
         )
         rows = page.inner_text("#results-list")
         assert "api-auth.md" in rows

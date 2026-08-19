@@ -111,13 +111,21 @@
         <label class="check"><input type="checkbox" id="only-changes"> только изменения</label>
         <div class="tabs">
           <button class="tab tab--active" data-view="diff">Было / стало</button>
-          <button class="tab" data-view="result">Готовый документ</button>
+          <button class="tab" data-view="preview">Превью с подсветкой</button>
+          <button class="tab" data-view="result">Исходный текст</button>
         </div>
         <button class="btn" id="download">Скачать обновлённый .md</button>
         <button class="btn btn--danger" id="apply">Заменить оригинал</button>
       </div>
     </div>
     <div id="diff-view" class="diff"></div>
+    <div id="preview-pane" hidden>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="show-removed"> показывать удалённые куски</label>
+        <span class="muted">Так документ будет выглядеть после правки. Новое — зелёным.</span>
+      </div>
+      <div id="preview-view" class="preview"></div>
+    </div>
     <div id="result-pane" hidden>
       <textarea id="result-view" class="result" rows="24" spellcheck="false"></textarea>
       <div class="row">
