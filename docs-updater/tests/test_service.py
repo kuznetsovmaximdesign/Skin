@@ -58,6 +58,7 @@ def client(tmp_path, monkeypatch, fake_ollama):
     # Правила формулировки и шаблон статьи — как в настоящей установке
     shutil.copy(REPO_ROOT / "data" / "style-rules.yaml", tmp_path / "style-rules.yaml")
     shutil.copy(REPO_ROOT / "data" / "template.schema.yaml", tmp_path / "template.schema.yaml")
+    shutil.copy(REPO_ROOT / "data" / "glossary.yaml", tmp_path / "glossary.yaml")
 
     config = {
         "ollama": {
@@ -83,6 +84,26 @@ def client(tmp_path, monkeypatch, fake_ollama):
         },
         "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
         "generation": {"temperature": 0.2, "num_ctx": 8192},
+        "security": {
+            "auth": "none",
+            "tokens": {},
+            "default_role": "writer",
+            "roles": {
+                "writer": {"classifications": ["public", "internal"]},
+                "lead": {"classifications": ["public", "internal", "confidential"]},
+            },
+            "confidential_paths": ["secret/*"],
+            "default_classification": "internal",
+            "audit": True,
+            "audit_log": "audit.jsonl",
+        },
+        "languages": {
+            "source": "ru",
+            "targets": ["en", "kk"],
+            "layout": "folder",
+            "low_resource": ["kk"],
+            "glossary": "glossary.yaml",
+        },
         "checks": {
             "enabled": True,
             "builtin_prose": True,
@@ -486,8 +507,8 @@ def test_no_external_urls_in_sources():
     allowed = ("localhost", "127.0.0.1", "0.0.0.0", "api.example.local")
     files = [
         *(REPO_ROOT / "backend").glob("*.py"),
+        *(REPO_ROOT / "backend" / "checks").glob("*.py"),
         *(REPO_ROOT / "frontend").glob("*.*"),
-        REPO_ROOT / "config.yaml",
     ]
     external: list[str] = []
     for path in files:
@@ -495,6 +516,34 @@ def test_no_external_urls_in_sources():
             if not any(host in url for host in allowed):
                 external.append(f"{path.name}: {url}")
     assert not external, f"Найдены внешние адреса: {external}"
+
+
+def test_publishing_is_disabled_and_addressless_by_default():
+    """Адреса площадок задаёт пользователь. По умолчанию наружу идти некуда и нечему."""
+    import re as regex
+
+    raw = (REPO_ROOT / "config.yaml").read_text(encoding="utf-8")
+    settings = yaml.safe_load(raw)
+
+    assert settings["publish"]["enabled"] is False
+    assert settings["publish"]["confluence"]["base_url"] == ""
+    assert settings["publish"]["portal"]["base_url"] == ""
+    # токены не хранятся в файле — только имена переменных окружения
+    assert settings["publish"]["confluence"]["auth_env"] == "CONFLUENCE_TOKEN"
+    assert "token:" not in raw.lower()
+
+    # вне комментариев-примеров внешних адресов в конфиге нет
+    active_lines = []
+    for line in raw.splitlines():
+        if line.strip().startswith("#"):
+            continue
+        active_lines.append(line.split(" #", 1)[0])
+    active = "\n".join(active_lines)
+    urls = [
+        url for url in regex.findall(r"https?://[^\s\"'`)<>]+", active)
+        if "localhost" not in url and "127.0.0.1" not in url
+    ]
+    assert urls == [], urls
 
 
 def test_frontend_has_no_external_assets():
@@ -1531,3 +1580,283 @@ def test_impact_respects_product_isolation(client):
         params={"product": "beta"},
     ).json()
     assert all(item["path"] == "beta-api.md" for item in data["documents"])
+
+
+# --- мультиязычность: каскад на языковые версии -----------------------------
+
+
+def test_language_versions_are_listed(client):
+    data = client.get("/api/languages", params={"doc_path": "api-auth.md"}).json()
+    assert data["source"] == "ru"
+    assert data["targets"] == ["en", "kk"]
+    languages = {item["language"]: item for item in data["versions"]}
+    assert languages["ru"]["is_source"] is True
+    assert languages["kk"]["needs_review"] is True   # низкоресурсный язык
+    assert languages["en"]["needs_review"] is False
+    assert languages["en"]["path"].endswith("/en/api-auth.md")
+
+
+def test_cascade_translates_and_marks_versions_needing_review(client):
+    data = client.post("/api/cascade", json={"doc_path": "api-auth.md"}).json()
+
+    assert data["summary"]["translated"] == 2
+    versions = {item["language"]: item for item in data["results"]}
+    assert "<!-- en -->" in versions["en"]["text"]
+    assert versions["en"]["needs_review"] is False
+    assert versions["kk"]["needs_review"] is True
+    assert "ручная вычитка" in versions["kk"]["reason"]
+
+    # результаты сохранены отдельными файлами, оригинал не тронут
+    for item in data["results"]:
+        assert (client.tmp_path / "output" / item["file"]).exists()
+    assert "60 минут" in (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+
+
+def test_cascade_passes_glossary_to_the_model(client):
+    client.post("/api/cascade", json={"doc_path": "api-auth.md", "targets": ["en"]})
+    prompt = last_prompt(client.ollama, "Переведи документ на язык")
+    assert "ГЛОССАРИЙ" in prompt
+    assert "токен доступа → access token" in prompt
+
+
+def test_cascade_checks_each_language_version(client):
+    client.ollama.translate_response = "## Сначала подраздел\n\nЮзер должен залогиниться."
+    data = client.post("/api/cascade", json={"doc_path": "api-auth.md", "targets": ["en"]}).json()
+    version = data["results"][0]
+    assert version["checks"]["errors"] > 0
+    assert version["needs_review"] is True
+    assert "нарушения" in version["reason"]
+
+
+def test_cascade_without_targets(client):
+    config_path = client.tmp_path / "config.yaml"
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["languages"]["targets"] = []
+    config_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    response = client.post("/api/cascade", json={"doc_path": "api-auth.md"})
+    assert response.status_code == 400
+    assert "целевые языки" in response.json()["detail"]
+
+
+def test_cascade_of_unknown_document(client):
+    response = client.post("/api/cascade", json={"doc_path": "нет-такого.md"})
+    assert response.status_code == 404
+
+
+# --- конфиденциальность, роли и аудит ---------------------------------------
+
+
+def make_secret_doc(client) -> None:
+    secret_dir = client.tmp_path / "docs" / "secret"
+    secret_dir.mkdir(exist_ok=True)
+    (secret_dir / "roadmap.md").write_text(
+        "---\nclassification: confidential\n---\n\n# Планы по токенам\n\n"
+        "## Назначение\n\nДокумент описывает будущий механизм токенов.\n\n"
+        "## Ограничения\n\n- Только для руководителей.\n",
+        encoding="utf-8",
+    )
+
+
+def enable_rutoken(client, thumbprint: str = "AB12CD34", role: str = "lead") -> None:
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["security"]["auth"] = "rutoken"
+    raw["security"]["tokens"] = {thumbprint: role}
+    (client.tmp_path / "config.yaml").write_text(
+        yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8"
+    )
+
+
+def test_search_hides_documents_the_role_may_not_see(client):
+    make_secret_doc(client)
+    client.post("/api/reindex")
+
+    candidates = client.post("/api/search", json={"query": "механизм токенов"}).json()["candidates"]
+    paths = {item["path"] for item in candidates}
+    assert "secret/roadmap.md" not in paths          # роль writer конфиденциальное не видит
+    assert all(item["classification"] in {"public", "internal"} for item in candidates)
+
+
+def test_role_with_clearance_sees_confidential_documents(client):
+    make_secret_doc(client)
+    enable_rutoken(client, "AB12CD34", "lead")
+    client.post("/api/reindex", headers={"X-Rutoken-Thumbprint": "AB12CD34"})
+
+    candidates = client.post(
+        "/api/search",
+        json={"query": "механизм токенов"},
+        headers={"X-Rutoken-Thumbprint": "AB12CD34"},
+    ).json()["candidates"]
+    assert "secret/roadmap.md" in {item["path"] for item in candidates}
+
+
+def test_rutoken_is_required_when_enabled(client):
+    enable_rutoken(client)
+    response = client.post("/api/search", json={"query": "токен"})
+    assert response.status_code == 401
+    assert "аппаратный токен" in response.json()["detail"]
+
+    wrong = client.post(
+        "/api/search", json={"query": "токен"}, headers={"X-Rutoken-Thumbprint": "UNKNOWN99"}
+    )
+    assert wrong.status_code == 401
+    assert "не входит в список" in wrong.json()["detail"]
+
+
+def test_role_can_be_limited_to_products(client):
+    add_second_product(client)
+    enable_rutoken(client, "CORE1", "core_writer")
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["security"]["roles"]["core_writer"] = {"classifications": ["internal"], "products": ["core"]}
+    (client.tmp_path / "config.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    headers = {"X-Rutoken-Thumbprint": "CORE1"}
+    assert client.post("/api/search", json={"query": "токен"}, headers=headers).status_code in (200, 400)
+    denied = client.post(
+        "/api/search", json={"query": "токен"}, params={"product": "beta"}, headers=headers
+    )
+    assert denied.status_code == 403
+    assert "не имеет доступа к продукту" in denied.json()["detail"]
+
+
+def test_audit_logs_events_without_content(client):
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "секретная правка"})
+    records = client.get("/api/audit").json()["records"]
+    assert records
+    event = records[-1]
+    assert event["event"] == "generate"
+    assert event["model"] == "qwen3:4b"
+    assert event["doc"] == "api-auth.md"
+    # само описание в журнал не попадает — только отпечаток и длина
+    raw_log = (client.tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert "секретная правка" not in raw_log
+    assert "description_fingerprint" in raw_log
+
+
+def test_outbound_check_blocks_requirements_and_confidential(client):
+    from backend import security
+
+    config = config_module.load_config()
+    plain = security.check_outbound(config, "# Документ\n\nОбычный текст.", "api-auth.md")
+    assert plain["allowed"] is True
+
+    secret = security.check_outbound(
+        config, "---\nclassification: confidential\n---\n\n# Планы\n", "secret/roadmap.md"
+    )
+    assert secret["allowed"] is False
+    assert "конфиденциальный" in secret["reasons"][0]
+
+    with_requirements = security.check_outbound(
+        config, "# Документ\n\nЗдесь описаны функциональные требования к модулю.", "api-auth.md"
+    )
+    assert with_requirements["allowed"] is False
+    assert "функциональных требований" in with_requirements["reasons"][0]
+
+
+# --- публикация: только по подтверждению, идемпотентно ----------------------
+
+
+@pytest.fixture()
+def targets():
+    from tests.fake_targets import FakeTargets
+
+    server = FakeTargets().start()
+    yield server
+    server.stop()
+
+
+def enable_publishing(client, targets, monkeypatch=None) -> None:
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["publish"] = {
+        "enabled": True,
+        "confluence": {"base_url": targets.url, "space": "DOCS", "auth_env": "TEST_CONFLUENCE_TOKEN"},
+        "portal": {"base_url": targets.url, "auth_env": "TEST_PORTAL_TOKEN"},
+        "registry": str(client.tmp_path / "publications.json"),
+    }
+    (client.tmp_path / "config.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+
+def test_publish_preview_shows_targets_and_does_not_send(client, targets):
+    enable_publishing(client, targets)
+    data = client.post("/api/publish/preview", json={"doc_path": "api-auth.md"}).json()
+
+    assert data["enabled"] is True
+    assert {item["target"] for item in data["targets"]} == {"confluence", "portal"}
+    assert all(item["action"] == "создать" for item in data["targets"])
+    assert data["outbound"]["allowed"] is True
+    assert data["title"] == "Авторизация в API"
+    assert targets.requests == []  # превью ничего не отправляет
+
+
+def test_publish_requires_confirmation(client, targets):
+    enable_publishing(client, targets)
+    response = client.post("/api/publish", json={"doc_path": "api-auth.md"})
+    assert response.status_code == 400
+    assert "не подтверждена" in response.json()["detail"]
+    assert targets.requests == []
+
+
+def test_publish_sends_to_both_targets_and_is_idempotent(client, targets):
+    enable_publishing(client, targets)
+
+    first = client.post("/api/publish", json={"doc_path": "api-auth.md", "confirm": True}).json()
+    assert first["summary"]["published"] == 2
+    assert {item["action"] for item in first["results"]} == {"создано"}
+    assert len(targets.pages) == 1 and len(targets.articles) == 1
+
+    second = client.post("/api/publish", json={"doc_path": "api-auth.md", "confirm": True}).json()
+    assert second["summary"]["published"] == 2
+    assert {item["action"] for item in second["results"]} == {"обновлено"}
+    # дубликатов не появилось: те же страница и статья, версии выросли
+    assert len(targets.pages) == 1 and len(targets.articles) == 1
+    assert second["registry"]["confluence"]["id"] == first["registry"]["confluence"]["id"]
+
+    stored = client.get("/api/publications").json()["publications"]
+    assert stored["api-auth.md"]["portal"]["id"] == first["registry"]["portal"]["id"]
+
+
+def test_publish_is_blocked_for_confidential_documents(client, targets):
+    make_secret_doc(client)
+    enable_publishing(client, targets)
+    response = client.post(
+        "/api/publish", json={"doc_path": "secret/roadmap.md", "confirm": True}
+    )
+    assert response.status_code == 400
+    assert "конфиденциальный" in response.json()["detail"]
+    assert targets.requests == []
+
+
+def test_publish_is_blocked_when_text_contains_requirements(client, targets):
+    doc = client.tmp_path / "docs" / "install-agent.md"
+    doc.write_text(
+        doc.read_text(encoding="utf-8") + "\n\nЗдесь описаны функциональные требования к агенту.\n",
+        encoding="utf-8",
+    )
+    enable_publishing(client, targets)
+    response = client.post("/api/publish", json={"doc_path": "install-agent.md", "confirm": True})
+    assert response.status_code == 400
+    assert "функциональных требований" in response.json()["detail"]
+    assert targets.requests == []
+
+
+def test_publish_is_off_by_default(client):
+    response = client.post("/api/publish", json={"doc_path": "api-auth.md", "confirm": True})
+    assert response.status_code == 400
+    assert "выключена" in response.json()["detail"]
+
+
+def test_publish_uses_token_from_environment(client, targets, monkeypatch):
+    enable_publishing(client, targets)
+    monkeypatch.setenv("TEST_CONFLUENCE_TOKEN", "secret-token")
+    client.post("/api/publish", json={"doc_path": "api-auth.md", "targets": ["confluence"], "confirm": True})
+    assert targets.requests[-1]["auth"] == "Bearer secret-token"
+
+
+def test_publication_events_are_audited_without_text(client, targets):
+    enable_publishing(client, targets)
+    client.post("/api/publish", json={"doc_path": "api-auth.md", "confirm": True})
+    records = client.get("/api/audit").json()["records"]
+    event = [item for item in records if item["event"] == "publish"][-1]
+    assert event["doc"] == "api-auth.md"
+    assert sorted(event["targets"]) == ["confluence", "portal"]
+    assert "Токен действует" not in (client.tmp_path / "audit.jsonl").read_text(encoding="utf-8")

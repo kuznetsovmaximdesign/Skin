@@ -12,13 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import changeset as changeset_module
-from . import article, checks, docmap, drift, impact, indexer, search, sections, style
+from . import article, checks, docmap, drift, impact, indexer, languages, search, sections
+from . import publish, security, style
 from .checks import prose as prose_rules
 from .verify import check_and_fix
 from .config import (
@@ -66,6 +67,21 @@ def update_setting(product: str | None, section: str, values: dict[str, Any]) ->
         target = raw.setdefault(section, {})
     target.update(values)
     save_config(raw)
+
+
+def current_role(request: Request, config: dict[str, Any]) -> str:
+    """Роль запроса. В режиме Рутокена — по отпечатку сертификата с токена."""
+    thumbprint = request.headers.get("X-Rutoken-Thumbprint", "")
+    role, denial = security.resolve_role(config, thumbprint)
+    if not role:
+        raise HTTPException(status_code=401, detail=denial)
+    product = config.get("product", "")
+    if product and not security.may_use_product(config, role, product):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Роль «{role}» не имеет доступа к продукту «{product}».",
+        )
+    return role
 
 
 def get_client(config: dict[str, Any]) -> OllamaClient:
@@ -244,9 +260,25 @@ class NewArticleRequest(BaseModel):
     use_examples: bool = True
 
 
+class CascadeRequest(BaseModel):
+    doc_path: str
+    # Текст-источник: если не передан, берётся файл документа
+    content: str | None = None
+    targets: list[str] | None = None
+
+
 class ImpactRequest(BaseModel):
     change_description: str = Field(min_length=1)
     top_k: int = 8
+
+
+class PublishRequest(BaseModel):
+    doc_path: str
+    # Что публикуем: результат из data/output или файл документации
+    result_file: str | None = None
+    title: str | None = None
+    targets: list[str] | None = None
+    confirm: bool = False
 
 
 class DriftRequest(BaseModel):
@@ -571,9 +603,11 @@ def document_map(product: str | None = None) -> dict[str, Any]:
 
 
 @app.post("/api/map/build")
-def build_document_map(force: bool = False, product: str | None = None) -> dict[str, Any]:
+def build_document_map(request: Request, force: bool = False, product: str | None = None) -> dict[str, Any]:
     """Считает недостающие резюме документов. Модели работают по очереди."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "map-build", role=role, model=config["ollama"]["generation_model"])
     if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Сначала нажмите «Переиндексировать».")
     client = get_client(config)
@@ -633,14 +667,25 @@ def document_outline(path: str, product: str | None = None) -> dict[str, Any]:
 
 
 @app.post("/api/search")
-def search_endpoint(payload: SearchRequest, product: str | None = None) -> dict[str, Any]:
+def search_endpoint(payload: SearchRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     config = load_config_for(product)
+    role = current_role(request, config)  # доступ проверяем раньше всего остального
     if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
     top_k = payload.top_k or int(config["search"]["top_k"])
     client = get_client(config)
     free_memory_for(config, client, "embedding")
     candidates = search.search_documents(indexer.index_path(config), client, payload.query, top_k)
+
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+
+    def read_candidate(path: str) -> str:
+        target = docs_dir / path
+        return indexer.read_text(target) if target.exists() else ""
+
+    # Поиск не выдаёт то, что роли не положено видеть.
+    candidates = security.filter_candidates(config, role, candidates, read_candidate)
+    security.audit(config, "search", role=role, results=len(candidates), description=payload.query)
     return {"candidates": candidates}
 
 
@@ -713,9 +758,11 @@ def store_result(
 
 
 @app.post("/api/changeset/propose")
-def propose_changeset(payload: ProposeRequest, product: str | None = None) -> dict[str, Any]:
+def propose_changeset(payload: ProposeRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     """Предлагает правки по разделам с обоснованием. Документ не меняется."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "changeset-propose", role=role, doc=payload.doc_path, description=payload.change_description, model=config["ollama"]["generation_model"])
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     source = safe_join(docs_dir, payload.doc_path)
     if not source.exists():
@@ -799,6 +846,13 @@ def build_changeset(changeset_id: str, product: str | None = None) -> dict[str, 
     }
 
 
+@app.get("/api/audit")
+def audit_log(limit: int = 100, product: str | None = None) -> dict[str, Any]:
+    """Журнал событий: обращения к модели и публикации. Текстов и ФТ в журнале нет."""
+    config = load_config_for(product)
+    return {"records": security.read_audit(config, limit)}
+
+
 @app.get("/api/feedback")
 def feedback(doc_path: str = "", product: str | None = None) -> dict[str, Any]:
     """Локальный лог: что писатель отклонял раньше."""
@@ -807,9 +861,11 @@ def feedback(doc_path: str = "", product: str | None = None) -> dict[str, Any]:
 
 
 @app.post("/api/article/new")
-def new_article(payload: NewArticleRequest, product: str | None = None) -> dict[str, Any]:
+def new_article(payload: NewArticleRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     """Черновик новой статьи по шаблону продукта. Проходит тот же цикл проверки, что и правки."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "article-new", role=role, title=payload.title, requirements=payload.requirements, model=config["ollama"]["generation_model"])
     style_guide = read_style_guide(config)
     client = get_client(config)
 
@@ -872,15 +928,123 @@ def new_article(payload: NewArticleRequest, product: str | None = None) -> dict[
     }
 
 
+@app.get("/api/languages")
+def language_versions(doc_path: str, product: str | None = None) -> dict[str, Any]:
+    """Языковые версии одной статьи и их состояние."""
+    config = load_config_for(product)
+    return {
+        "doc_path": doc_path,
+        "source": languages.source_language(config),
+        "targets": languages.target_languages(config),
+        "versions": languages.versions(config, doc_path),
+    }
+
+
+@app.post("/api/cascade")
+def cascade_endpoint(payload: CascadeRequest, request: Request, product: str | None = None) -> dict[str, Any]:
+    """Каскад: переносит готовую версию на остальные языки. Оригиналы не трогаются."""
+    config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "cascade", role=role, doc=payload.doc_path, model=config["ollama"]["generation_model"])
+    text = payload.content or languages.read_source(config, payload.doc_path)
+    if not text.strip():
+        raise HTTPException(status_code=404, detail=f"Не найден исходный текст для {payload.doc_path}")
+
+    targets = payload.targets or languages.target_languages(config)
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail="Не заданы целевые языки: заполните languages.targets в config.yaml.",
+        )
+
+    client = get_client(config)
+    free_memory_for(config, client, "generation")
+    return languages.cascade(
+        config=config,
+        client=client,
+        doc_path=payload.doc_path,
+        text=text,
+        targets=targets,
+        style_guide=read_style_guide(config),
+    )
+
+
 @app.post("/api/impact")
-def impact_endpoint(payload: ImpactRequest, product: str | None = None) -> dict[str, Any]:
+def impact_endpoint(payload: ImpactRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     """Все статьи, которых касается изменение: класс, релевантность и причина."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "impact", role=role, description=payload.change_description, model=config["ollama"]["generation_model"])
     if not indexer.index_exists(config):
         raise HTTPException(status_code=400, detail="Индекс пуст. Нажмите «Переиндексировать».")
     client = get_client(config)
     free_memory_for(config, client, "embedding")
     return impact.analyze(config, client, payload.change_description, top_k=payload.top_k)
+
+
+def publication_text(config: dict[str, Any], payload: PublishRequest) -> tuple[str, str]:
+    """Текст для публикации: либо готовый результат, либо текущий файл документации."""
+    if payload.result_file:
+        output_dir = resolve_path(config["paths"]["output_dir"])
+        source = safe_join(output_dir, payload.result_file)
+    else:
+        docs_dir = resolve_path(config["paths"]["docs_dir"])
+        source = safe_join(docs_dir, payload.doc_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"Не найден файл для публикации: {source.name}")
+
+    text = indexer.read_text(source)
+    title = payload.title or next(
+        (line.lstrip("# ").strip() for line in text.splitlines() if line.startswith("# ")),
+        Path(payload.doc_path).stem,
+    )
+    return text, title
+
+
+@app.post("/api/publish/preview")
+def publish_preview(payload: PublishRequest, request: Request, product: str | None = None) -> dict[str, Any]:
+    """Что и куда уйдёт при публикации. Ничего не отправляет."""
+    config = load_config_for(product)
+    current_role(request, config)
+    text, title = publication_text(config, payload)
+    return {**publish.preview(config, payload.doc_path, text), "title": title}
+
+
+@app.post("/api/publish")
+def publish_endpoint(payload: PublishRequest, request: Request, product: str | None = None) -> dict[str, Any]:
+    """Публикация в Confluence и на портал — только по явному подтверждению."""
+    config = load_config_for(product)
+    role = current_role(request, config)
+    text, title = publication_text(config, payload)
+    try:
+        result = publish.publish(
+            config,
+            doc_path=payload.doc_path,
+            title=title,
+            text=text,
+            targets=payload.targets,
+            confirmed=payload.confirm,
+        )
+    except publish.PublishError as error:
+        security.audit(config, "publish-denied", role=role, doc=payload.doc_path, outcome=error.message)
+        raise HTTPException(status_code=400, detail=error.message + (f" {error.hint}" if error.hint else ""))
+
+    security.audit(
+        config,
+        "publish",
+        role=role,
+        doc=payload.doc_path,
+        targets=[item["target"] for item in result["results"] if item["ok"]],
+        outcome="ok" if not result["summary"]["failed"] else "partial",
+    )
+    return result
+
+
+@app.get("/api/publications")
+def publications(product: str | None = None) -> dict[str, Any]:
+    """Соответствие «локальный документ ↔ страница Confluence ↔ статья портала»."""
+    config = load_config_for(product)
+    return {"publications": publish.load_registry(config)}
 
 
 @app.post("/api/drift")
@@ -914,8 +1078,10 @@ def check_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[s
 
 
 @app.post("/api/generate")
-def generate_endpoint(payload: GenerateRequest, product: str | None = None) -> dict[str, Any]:
+def generate_endpoint(payload: GenerateRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "generate", role=role, doc=payload.doc_path, description=payload.change_description, model=config["ollama"]["generation_model"])
     context = load_generation_context(config, payload)
     original, style_guide = context["original"], context["style_guide"]
     span, section_payload = context["span"], context["section"]
@@ -976,9 +1142,11 @@ def generate_endpoint(payload: GenerateRequest, product: str | None = None) -> d
 
 
 @app.post("/api/generate/stream")
-def generate_stream_endpoint(payload: GenerateRequest, product: str | None = None) -> StreamingResponse:
+def generate_stream_endpoint(payload: GenerateRequest, request: Request, product: str | None = None) -> StreamingResponse:
     """То же обновление, но текст отдаётся по мере генерации — писателю не нужно ждать вслепую."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "generate-stream", role=role, doc=payload.doc_path, description=payload.change_description, model=config["ollama"]["generation_model"])
     context = load_generation_context(config, payload)
     original, style_guide = context["original"], context["style_guide"]
     span, section_payload = context["span"], context["section"]
@@ -1067,9 +1235,11 @@ def generate_stream_endpoint(payload: GenerateRequest, product: str | None = Non
 
 
 @app.post("/api/review")
-def review_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[str, Any]:
+def review_endpoint(payload: ReviewRequest, request: Request, product: str | None = None) -> dict[str, Any]:
     """Проверка готового текста по гайду вторым проходом модели."""
     config = load_config_for(product)
+    role = current_role(request, config)
+    security.audit(config, "review", role=role, content=payload.content, model=config["ollama"]["generation_model"])
     style_guide = read_style_guide(config)
     if not style_guide.strip():
         raise HTTPException(

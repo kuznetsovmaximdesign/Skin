@@ -1,0 +1,17 @@
+# Общий термбейз: одни и те же термины во всех языковых версиях.
+# Его же использует проверка формулировок (см. data/style-rules.yaml).
+
+terms:
+  токен доступа:
+    en: access token
+    de: Zugriffstoken
+    fr: jeton d'accès
+  вебхук:
+    en: webhook
+    de: Webhook
+  коллектор:
+    en: collector
+    de: Collector
+  отчёт:
+    en: report
+    de: Bericht

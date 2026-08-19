@@ -49,6 +49,32 @@ DEFAULTS: dict[str, Any] = {
             "core": {"name": "Основной продукт"},
         },
     },
+    "languages": {
+        "source": "ru",
+        "targets": [],
+        "layout": "folder",
+        "low_resource": [],
+        "glossary": "data/glossary.yaml",
+    },
+    "publish": {
+        "enabled": False,
+        "confluence": {"base_url": "", "space": "", "auth_env": "CONFLUENCE_TOKEN"},
+        "portal": {"base_url": "", "auth_env": "PORTAL_TOKEN"},
+        "registry": "data/publications.json",
+    },
+    "security": {
+        "auth": "none",
+        "tokens": {},
+        "default_role": "writer",
+        "roles": {
+            "writer": {"classifications": ["public", "internal"]},
+            "lead": {"classifications": ["public", "internal", "confidential"]},
+        },
+        "confidential_paths": ["secret/*", "*/secret/*"],
+        "default_classification": "internal",
+        "audit": True,
+        "audit_log": "data/audit.jsonl",
+    },
     "checks": {
         "enabled": True,
         "builtin_prose": True,

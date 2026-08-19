@@ -69,6 +69,54 @@ products:
     #   index_file: "data/beta/index.sqlite3"
     #   output_dir: "data/beta/output"
 
+# Языковые версии одной статьи.
+languages:
+  # Язык-источник: на нём делаются правки, остальные версии получаются каскадом.
+  source: "ru"
+  # Целевые языки (15 версий документа)
+  targets: ["en", "de", "fr", "es", "it", "pt", "pl", "tr", "kk", "uz", "hy", "ka", "zh", "ja", "ar"]
+  # Как разложены файлы: folder → docs/<язык>/путь, suffix → путь/имя.<язык>.md
+  layout: "folder"
+  # Языки, на которых открытые модели слабее: версии помечаются как требующие вычитки
+  low_resource: ["kk", "uz", "hy", "ka", "ar"]
+  # Общий термбейз: те же термины, что проверяет модуль соответствия
+  glossary: "data/glossary.yaml"
+
+# Конфиденциальность, доступ и аудит.
+# Публикация. Выключена по умолчанию: сервис офлайн, наружу ничего не уходит.
+# Адреса — внутренние, доступы берутся из переменных окружения, не из файла.
+publish:
+  enabled: false
+  confluence:
+    base_url: ""        # например https://confluence.internal
+    space: ""
+    auth_env: "CONFLUENCE_TOKEN"
+  portal:
+    base_url: ""        # например https://help.internal
+    auth_env: "PORTAL_TOKEN"
+  # Соответствие «документ ↔ страница ↔ статья», чтобы повторная публикация обновляла
+  registry: "data/publications.json"
+
+security:
+  # Доступ: none — локальный сервис без проверки; rutoken — только по аппаратному токену.
+  auth: "none"
+  # Отпечаток сертификата с Рутокена → роль. Заполняется при auth: rutoken.
+  tokens: {}
+  #   "3f2a…c91": "lead"
+  default_role: "writer"
+  roles:
+    writer:
+      classifications: ["public", "internal"]
+    lead:
+      classifications: ["public", "internal", "confidential"]
+  # Документы этих путей всегда считаются конфиденциальными
+  confidential_paths: ["secret/*", "*/secret/*"]
+  # Уровень по умолчанию, если в документе нет поля classification
+  default_classification: "internal"
+  # Журнал событий: пишутся только факты обращений, без текстов и без ФТ
+  audit: true
+  audit_log: "data/audit.jsonl"
+
 checks:
   # Машинная проверка соответствия: формулировка + оформление + шаблон.
   enabled: true

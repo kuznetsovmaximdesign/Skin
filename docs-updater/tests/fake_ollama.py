@@ -32,6 +32,7 @@ class FakeOllama:
         # Необязательное преобразование присланного текста: (prompt, text) -> text.
         self.transform = None
         self.impact_response = "КЛАСС: дополнить\nПРИЧИНА: описан затронутый функционал"
+        self.translate_response: str | None = None
         # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
         self.chunk_delay = 0.0
         self.review_response = (
@@ -130,6 +131,14 @@ class FakeOllama:
             # По умолчанию «модель» ничего не чинит и возвращает текст как есть.
             match = re.search(r"# ТЕКСТ\n\n(.*?)\n\n# НАРУШЕНИЯ", prompt, re.DOTALL)
             return match.group(1) if match else ""
+        if "Переведи документ на язык" in prompt:
+            if self.translate_response is not None:
+                return self.translate_response
+            found = re.search(r"# ДОКУМЕНТ\n\n(.*?)\n\n# ЗАДАНИЕ", prompt, re.DOTALL)
+            language = re.search(r"на язык «([^»]+)»", prompt)
+            body = found.group(1) if found else ""
+            tag = language.group(1) if language else "xx"
+            return f"{body}\n\n<!-- {tag} -->"
         if "Классифицируй, что нужно сделать с этим документом" in prompt:
             return self.impact_response
         if "# ЗАДАНИЕ\n\nНапиши раздел" in prompt:
