@@ -59,6 +59,11 @@ def client(tmp_path, monkeypatch, fake_ollama):
         "paths": {
             "docs_dir": "docs",
             "style_guide": "styleguide.md",
+            "style_guides": ["styleguide.md"],
+            "samples_dir": "samples",
+            "rules_dir": "rules",
+            "derived_guide": "derived-guide.md",
+            "use_derived_guide": True,
             "index_file": "index.sqlite3",
             "output_dir": "output",
         },
@@ -856,3 +861,114 @@ def test_index_stores_vectors_in_sqlite(client):
     assert {"documents", "sections", "meta"} <= tables
     assert isinstance(row[0], bytes)  # вектор лежит бинарно, а не текстом
     assert len(index_store.unpack(row[0])) > 10
+
+
+# --- образцы оформления и обученный формат ---------------------------------
+
+
+SAMPLE_DOC = """# Настройка вебхуков
+
+## Назначение
+
+Документ описывает подключение вебхуков. Настройка занимает пять минут.
+
+## Предварительные условия
+
+- Роль «Интегратор».
+- Открытый порт 443.
+
+## Ограничения
+
+- Не более 5 вебхуков на проект.
+"""
+
+
+def upload_sample(client, name: str = "sample.md", text: str = SAMPLE_DOC):
+    return client.post(
+        "/api/samples/upload",
+        files={"files": (name, text.encode("utf-8"), "text/markdown")},
+    )
+
+
+def test_samples_upload_and_list(client):
+    assert client.get("/api/samples").json()["samples"] == []
+    response = upload_sample(client)
+    assert response.status_code == 200
+    assert response.json()["added"] == ["sample.md"]
+    assert [item["file"] for item in client.get("/api/samples").json()["samples"]] == ["sample.md"]
+
+    client.request("DELETE", "/api/samples", params={"file": "sample.md"})
+    assert client.get("/api/samples").json()["samples"] == []
+
+
+def test_samples_reject_other_formats(client):
+    response = client.post(
+        "/api/samples/upload", files={"files": ("sample.pdf", b"x", "application/pdf")}
+    )
+    assert response.status_code == 400
+
+
+def test_learning_format_persists_and_is_used_afterwards(client):
+    upload_sample(client)
+    upload_sample(client, "second.md", SAMPLE_DOC.replace("вебхуков", "уведомлений"))
+
+    learned = client.post("/api/format/learn", json={"use_model": False}).json()
+    profile = learned["profile"]
+    assert profile["documents"] == 2
+    assert profile["address"] == "вы"
+    assert profile["bullet_marker"] == "-"
+    assert "Назначение" in profile["typical_sections"]
+    assert (client.tmp_path / "derived-guide.md").exists()
+
+    # формат запомнен: он подмешивается в каждую следующую генерацию сам
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    assert "Формат, изученный по образцам" in prompt
+    assert "Обращение к читателю — на «вы»" in prompt
+    assert "Обязательные правила оформления" in prompt  # явный гайд по-прежнему первым
+
+
+def test_learned_format_can_be_switched_off_and_forgotten(client):
+    upload_sample(client)
+    client.post("/api/format/learn", json={"use_model": False})
+
+    client.post("/api/format/use", json={"enabled": False})
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    assert "Формат, изученный по образцам" not in client.ollama.requests[-1]["payload"]["prompt"]
+
+    client.post("/api/format/use", json={"enabled": True})
+    sources = client.request("DELETE", "/api/format").json()
+    assert sources["derived"]["exists"] is False
+
+
+def test_learning_format_uses_model_when_asked(client):
+    upload_sample(client)
+    client.ollama.generate_response = "- Всегда указывать порт\n- Не использовать сокращения"
+    learned = client.post("/api/format/learn", json={"use_model": True}).json()
+    assert learned["used_model"] is True
+    assert "Всегда указывать порт" in learned["text"]
+    assert "ИЗМЕРЕННЫЕ ПРИЗНАКИ" in client.ollama.requests[-1]["payload"]["prompt"]
+
+
+def test_learning_without_samples(client):
+    response = client.post("/api/format/learn", json={"use_model": False})
+    assert response.status_code == 400
+    assert "нет файлов .md" in response.json()["detail"]
+
+
+def test_several_rule_files_are_all_applied(client):
+    response = client.post(
+        "/api/style-guides/upload",
+        files={"files": ("brand.md", "# Правила бренда\n\n- Название продукта не склоняем.".encode("utf-8"), "text/markdown")},
+    )
+    assert response.status_code == 200
+    assert [guide["file"] for guide in response.json()["guides"]] == ["styleguide.md", "brand.md"]
+
+    client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
+    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    assert "файл styleguide.md" in prompt
+    assert "файл brand.md" in prompt
+    assert "Название продукта не склоняем" in prompt
+
+    client.request("DELETE", "/api/style-guides", params={"file": "brand.md"})
+    assert [guide["file"] for guide in client.get("/api/style-sources").json()["guides"]] == ["styleguide.md"]

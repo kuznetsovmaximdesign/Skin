@@ -60,6 +60,37 @@
       <span class="muted" id="guide-info"></span>
     </div>
     <textarea id="guide-text" rows="10" placeholder="Правила формулирования документов…"></textarea>
+
+    <h3 class="subhead">Дополнительные файлы правил оформления</h3>
+    <p class="muted">Можно подложить сколько угодно файлов — все они обязательны к соблюдению.</p>
+    <div class="row">
+      <label class="file-btn">Добавить файлы правил
+        <input type="file" id="rules-files" accept=".md,.markdown,.txt" multiple hidden>
+      </label>
+      <span class="muted" id="rules-info"></span>
+    </div>
+    <div id="rules-list" class="file-list"></div>
+
+    <h3 class="subhead">Образцы: сервис сам изучит формат</h3>
+    <p class="muted">Подложите готовые документы — сервис разберёт их структуру и оформление один раз,
+      дальше будет придерживаться этого формата сам.</p>
+    <div class="row">
+      <label class="file-btn">Добавить образцы
+        <input type="file" id="sample-files" accept=".md,.markdown,.txt" multiple hidden>
+      </label>
+      <button class="btn btn--primary" id="learn-format">Изучить формат</button>
+      <label class="check"><input type="checkbox" id="learn-with-model" checked> дополнить правилами от модели</label>
+    </div>
+    <div id="samples-list" class="file-list"></div>
+    <div id="format-status" class="format-status"></div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="use-derived" checked> применять изученный формат</label>
+      <button class="btn" id="forget-format">Забыть формат</button>
+    </div>
+    <details id="format-details" hidden>
+      <summary>Показать изученные правила</summary>
+      <pre id="format-text" class="result"></pre>
+    </details>
   </section>
 
   <!-- Шаг 3 -->

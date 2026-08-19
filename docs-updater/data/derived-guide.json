@@ -1,0 +1,26 @@
+{
+  "documents": 1,
+  "files": [
+    "sample-doc.md"
+  ],
+  "bullet_marker": "-",
+  "ordered_marker": ".",
+  "typical_sections": [
+    "Назначение",
+    "Ограничения"
+  ],
+  "avg_sentence_words": 4.0,
+  "max_sentence_words": 4,
+  "avg_paragraph_sentences": 1.0,
+  "address": "вы",
+  "uses_we": false,
+  "date_format": "",
+  "versions_spelled": false,
+  "uses_inline_code": false,
+  "uses_tables": false,
+  "code_blocks": 0,
+  "code_blocks_with_lang": 0,
+  "uses_links": false,
+  "exclamations": 0,
+  "heading_case": "с заглавной только первое слово"
+}

@@ -24,7 +24,16 @@ DEFAULTS: dict[str, Any] = {
     },
     "paths": {
         "docs_dir": "data/docs",
+        # Файлы с правилами оформления. Можно несколько — все попадут в инструкцию модели.
+        "style_guides": ["data/styleguide.md"],
+        # Старое поле на один файл: поддерживается для совместимости.
         "style_guide": "data/styleguide.md",
+        # Папка с образцами: по ним сервис сам выводит формат.
+        "samples_dir": "data/samples",
+        # Куда сохраняются выведенные из образцов правила.
+        "derived_guide": "data/derived-guide.md",
+        # Учитывать ли выведенные правила при генерации.
+        "use_derived_guide": True,
         "index_file": "data/index.sqlite3",
         "output_dir": "data/output",
     },
@@ -57,6 +66,22 @@ def save_config(config: dict[str, Any]) -> None:
         yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+
+
+def style_guide_paths(config: dict[str, Any]) -> list[Path]:
+    """Все файлы правил оформления: новое поле style_guides плюс старое style_guide."""
+    raw = config["paths"].get("style_guides") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    single = config["paths"].get("style_guide")
+    if single and single not in raw:
+        raw = [single, *raw]
+    seen: list[Path] = []
+    for item in raw:
+        path = resolve_path(item)
+        if path not in seen:
+            seen.append(path)
+    return seen
 
 
 def resolve_path(value: str | Path) -> Path:

@@ -42,6 +42,25 @@ const Api = (() => {
       return request('/api/style-guide/upload', { method: 'POST', body: form });
     },
 
+    styleSources: () => request('/api/style-sources'),
+    uploadRules: (files) => {
+      const form = new FormData();
+      Array.from(files).forEach((file) => form.append('files', file));
+      return request('/api/style-guides/upload', { method: 'POST', body: form });
+    },
+    removeRules: (file) => request('/api/style-guides?file=' + encodeURIComponent(file), { method: 'DELETE' }),
+
+    samples: () => request('/api/samples'),
+    uploadSamples: (files) => {
+      const form = new FormData();
+      Array.from(files).forEach((file) => form.append('files', file));
+      return request('/api/samples/upload', { method: 'POST', body: form });
+    },
+    removeSample: (file) => request('/api/samples?file=' + encodeURIComponent(file), { method: 'DELETE' }),
+    learnFormat: (useModel) => post('/api/format/learn', { use_model: useModel }),
+    useDerived: (enabled) => post('/api/format/use', { enabled }),
+    forgetFormat: () => request('/api/format', { method: 'DELETE' }),
+
     reindex: () => post('/api/reindex'),
     search: (query) => post('/api/search', { query }),
 

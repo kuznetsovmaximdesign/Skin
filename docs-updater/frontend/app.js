@@ -135,6 +135,106 @@ async function loadGuide() {
     : `Файл гайда пока не найден: ${data.path}`;
 }
 
+
+/* ---------- правила оформления и обученный формат ---------- */
+
+function renderStyleSources(data) {
+  $('rules-list').innerHTML = data.guides.map((guide) => `
+    <div class="file-list__row">
+      <span>${escapeHtml(guide.file)}${guide.exists ? '' : ' — файл не найден'}</span>
+      <button class="file-list__drop" data-rule="${escapeHtml(guide.file)}">убрать</button>
+    </div>`).join('') || '<p class="muted">Дополнительных файлов правил нет.</p>';
+
+  $('rules-list').querySelectorAll('[data-rule]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        renderStyleSources(await Api.removeRules(button.dataset.rule));
+        toast('Файл правил убран из списка');
+      } catch (error) { showError(error); }
+    });
+  });
+
+  const derived = data.derived || {};
+  const status = $('format-status');
+  if (derived.exists) {
+    const docs = (derived.profile && derived.profile.documents) || 0;
+    status.className = 'format-status format-status--ok';
+    status.textContent = `Формат изучен по образцам (${docs} док., ${derived.learned_at}). `
+      + (data.use_derived_guide ? 'Применяется при каждой правке.' : 'Сейчас выключен.');
+    $('format-details').hidden = false;
+    $('format-text').textContent = derived.text || '';
+  } else {
+    status.className = 'format-status format-status--none';
+    status.textContent = 'Формат ещё не изучен: добавьте образцы и нажмите «Изучить формат».';
+    $('format-details').hidden = true;
+  }
+  $('use-derived').checked = Boolean(data.use_derived_guide);
+}
+
+async function loadSamples() {
+  const data = await Api.samples();
+  $('samples-list').innerHTML = data.samples.map((item) => `
+    <div class="file-list__row">
+      <span>${escapeHtml(item.file)}</span>
+      <button class="file-list__drop" data-sample="${escapeHtml(item.file)}">удалить</button>
+    </div>`).join('') || '<p class="muted">Образцов пока нет.</p>';
+
+  $('samples-list').querySelectorAll('[data-sample]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        await Api.removeSample(button.dataset.sample);
+        await loadSamples();
+      } catch (error) { showError(error); }
+    });
+  });
+}
+
+async function loadStyleSources() {
+  renderStyleSources(await Api.styleSources());
+}
+
+$('rules-files').addEventListener('change', async (event) => {
+  if (!event.target.files.length) return;
+  busy('Добавляем файлы правил…');
+  try {
+    renderStyleSources(await Api.uploadRules(event.target.files));
+    toast('Правила добавлены — они обязательны при каждой правке');
+  } catch (error) { showError(error); } finally { idle(); event.target.value = ''; }
+});
+
+$('sample-files').addEventListener('change', async (event) => {
+  if (!event.target.files.length) return;
+  busy('Загружаем образцы…');
+  try {
+    await Api.uploadSamples(event.target.files);
+    await loadSamples();
+    toast('Образцы загружены. Нажмите «Изучить формат».');
+  } catch (error) { showError(error); } finally { idle(); event.target.value = ''; }
+});
+
+$('learn-format').addEventListener('click', async () => {
+  busy('Разбираем образцы и запоминаем формат…');
+  try {
+    const data = await Api.learnFormat($('learn-with-model').checked);
+    renderStyleSources(data);
+    toast(`Формат изучен по ${data.profile.documents} документам — дальше применяется сам`);
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+$('use-derived').addEventListener('change', async (event) => {
+  try {
+    renderStyleSources(await Api.useDerived(event.target.checked));
+  } catch (error) { showError(error); }
+});
+
+$('forget-format').addEventListener('click', async () => {
+  if (!confirm('Забыть изученный формат? Образцы останутся на месте.')) return;
+  try {
+    renderStyleSources(await Api.forgetFormat());
+    toast('Формат забыт');
+  } catch (error) { showError(error); }
+});
+
 /* ---------- шаг 3: поиск документа ---------- */
 
 function selectDoc(path, title, heading) {
@@ -592,6 +692,8 @@ $('apply').addEventListener('click', async () => {
     await loadStatus();
     await loadDocuments();
     await loadGuide();
+    await loadStyleSources();
+    await loadSamples();
     await loadResults();
   } catch (error) { showError(error); }
 })();

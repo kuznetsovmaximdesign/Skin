@@ -17,8 +17,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import indexer, search, sections
-from .config import load_config, resolve_path, save_config
+from . import indexer, search, sections, style
+from .config import PROJECT_ROOT, load_config, resolve_path, save_config, style_guide_paths
 from .diffing import build_diff, unified_diff
 from .generator import check_result, generate_update, prepare_generation, review_document
 from .ollama_client import OllamaClient, OllamaError, clean_model_output
@@ -62,11 +62,68 @@ def safe_join(base: Path, relative: str) -> Path:
     return candidate
 
 
-def read_style_guide(config: dict[str, Any]) -> str:
-    path = resolve_path(config["paths"]["style_guide"])
+def read_file(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def derived_guide_path(config: dict[str, Any]) -> Path:
+    return resolve_path(config["paths"].get("derived_guide", "data/derived-guide.md"))
+
+
+def samples_dir(config: dict[str, Any]) -> Path:
+    return resolve_path(config["paths"].get("samples_dir", "data/samples"))
+
+
+def profile_path(config: dict[str, Any]) -> Path:
+    return derived_guide_path(config).with_suffix(".json")
+
+
+def read_style_guide(config: dict[str, Any]) -> str:
+    """Все правила одним текстом: сначала обязательные файлы, затем формат из образцов.
+
+    Явные правила идут первыми и объявлены главными — выведенный формат лишь дополняет их.
+    """
+    parts: list[str] = []
+    for path in style_guide_paths(config):
+        content = read_file(path).strip()
+        if content:
+            parts.append(f"## Обязательные правила оформления — файл {path.name}\n\n{content}")
+
+    if config["paths"].get("use_derived_guide", True):
+        derived = read_file(derived_guide_path(config)).strip()
+        if derived:
+            parts.append(
+                "## Формат, изученный по образцам (следовать, если не противоречит правилам выше)"
+                f"\n\n{derived}"
+            )
+    return "\n\n".join(parts)
+
+
+def style_sources(config: dict[str, Any]) -> dict[str, Any]:
+    """Из чего сейчас складываются правила — для интерфейса."""
+    guides = [
+        {"file": path.name, "path": str(path), "exists": path.exists(), "chars": len(read_file(path))}
+        for path in style_guide_paths(config)
+    ]
+    derived = derived_guide_path(config)
+    learned: dict[str, Any] = {"exists": derived.exists(), "path": str(derived)}
+    if derived.exists():
+        stored = read_file(profile_path(config))
+        if stored:
+            try:
+                learned["profile"] = json.loads(stored)
+            except json.JSONDecodeError:
+                learned["profile"] = {}
+        learned["learned_at"] = datetime.fromtimestamp(derived.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        learned["text"] = read_file(derived)
+    return {
+        "guides": guides,
+        "derived": learned,
+        "use_derived_guide": bool(config["paths"].get("use_derived_guide", True)),
+        "samples_dir": str(samples_dir(config)),
+    }
 
 
 def meta_path(result_path: Path) -> Path:
@@ -147,6 +204,15 @@ class ApplyRequest(BaseModel):
 
 class StyleGuideText(BaseModel):
     content: str
+
+
+class LearnFormatRequest(BaseModel):
+    # Спросить ли модель сформулировать правила словами (медленнее, но подробнее).
+    use_model: bool = True
+
+
+class UseDerivedRequest(BaseModel):
+    enabled: bool
 
 
 # --- статус и конфигурация -------------------------------------------------
@@ -235,6 +301,148 @@ async def upload_style_guide(file: UploadFile = File(...)) -> dict[str, Any]:
     content = (await file.read()).decode("utf-8", errors="replace")
     path.write_text(content, encoding="utf-8")
     return {"path": str(path), "exists": True, "content": content}
+
+
+# --- образцы оформления и обученный формат ---------------------------------
+
+
+@app.get("/api/style-sources")
+def style_sources_endpoint() -> dict[str, Any]:
+    return style_sources(load_config())
+
+
+@app.post("/api/style-guides/upload")
+async def upload_style_guides(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    """Добавляет файлы с правилами оформления. Их может быть сколько угодно."""
+    config = load_config()
+    target_dir = resolve_path(config["paths"].get("rules_dir", "data/rules"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    added: list[str] = []
+    for file in files:
+        name = Path(file.filename or "rules.md").name
+        if not name.lower().endswith((".md", ".markdown", ".txt")):
+            raise HTTPException(status_code=400, detail=f"«{name}»: правила должны быть файлом .md")
+        destination = target_dir / name
+        destination.write_text((await file.read()).decode("utf-8", errors="replace"), encoding="utf-8")
+        relative = str(destination.relative_to(PROJECT_ROOT)) if destination.is_relative_to(PROJECT_ROOT) else str(destination)
+        guides = config["paths"].get("style_guides") or []
+        if isinstance(guides, str):
+            guides = [guides]
+        if relative not in guides:
+            guides.append(relative)
+        config["paths"]["style_guides"] = guides
+        added.append(name)
+
+    save_config(config)
+    return {"added": added, **style_sources(load_config())}
+
+
+@app.delete("/api/style-guides")
+def remove_style_guide(file: str) -> dict[str, Any]:
+    """Убирает файл правил из списка (сам файл на диске остаётся)."""
+    config = load_config()
+    guides = config["paths"].get("style_guides") or []
+    if isinstance(guides, str):
+        guides = [guides]
+    kept = [item for item in guides if Path(item).name != Path(file).name]
+    config["paths"]["style_guides"] = kept
+    if config["paths"].get("style_guide") and Path(config["paths"]["style_guide"]).name == Path(file).name:
+        config["paths"]["style_guide"] = kept[0] if kept else ""
+    save_config(config)
+    return style_sources(load_config())
+
+
+@app.get("/api/samples")
+def list_samples() -> dict[str, Any]:
+    directory = samples_dir(load_config())
+    files = sorted(directory.glob("*.md")) if directory.exists() else []
+    return {
+        "dir": str(directory),
+        "samples": [{"file": path.name, "chars": path.stat().st_size} for path in files],
+    }
+
+
+@app.post("/api/samples/upload")
+async def upload_samples(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    """Загрузка готовых документов-образцов, по которым сервис изучает формат."""
+    directory = samples_dir(load_config())
+    directory.mkdir(parents=True, exist_ok=True)
+    added: list[str] = []
+    for file in files:
+        name = Path(file.filename or "sample.md").name
+        if not name.lower().endswith((".md", ".markdown", ".txt")):
+            raise HTTPException(status_code=400, detail=f"«{name}»: образец должен быть файлом .md")
+        (directory / name).write_text(
+            (await file.read()).decode("utf-8", errors="replace"), encoding="utf-8"
+        )
+        added.append(name)
+    return {"added": added, **list_samples()}
+
+
+@app.delete("/api/samples")
+def remove_sample(file: str) -> dict[str, Any]:
+    directory = samples_dir(load_config())
+    target = safe_join(directory, Path(file).name)
+    if target.exists():
+        target.unlink()
+    return list_samples()
+
+
+@app.post("/api/format/learn")
+def learn_format(payload: LearnFormatRequest) -> dict[str, Any]:
+    """Разбирает образцы и запоминает формат: дальше он применяется сам при каждой генерации."""
+    config = load_config()
+    directory = samples_dir(config)
+    files = sorted(directory.glob("*.md")) if directory.exists() else []
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"В папке образцов {directory} нет файлов .md. Загрузите примеры документов.",
+        )
+
+    profile = style.analyze_samples(files)
+    measured = style.profile_to_markdown(profile)
+
+    model_rules = ""
+    if payload.use_model:
+        client = get_client(config)
+        free_memory_for(config, client, "generation")
+        excerpts = [style.read_sample(path)[:3000] for path in files[:3]]
+        model_rules = style.derive_rules_with_model(config, client, profile, excerpts)
+
+    text = measured
+    if model_rules.strip():
+        text += "\n## Правила, сформулированные по образцам\n\n" + model_rules.strip() + "\n"
+
+    target = derived_guide_path(config)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    profile_path(config).write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    config["paths"]["use_derived_guide"] = True
+    save_config(config)
+
+    return {"profile": profile, "text": text, "used_model": bool(model_rules.strip()), **style_sources(load_config())}
+
+
+@app.post("/api/format/use")
+def toggle_derived(payload: UseDerivedRequest) -> dict[str, Any]:
+    """Включает или выключает применение изученного формата."""
+    config = load_config()
+    config["paths"]["use_derived_guide"] = payload.enabled
+    save_config(config)
+    return style_sources(load_config())
+
+
+@app.delete("/api/format")
+def forget_format() -> dict[str, Any]:
+    """Забыть изученный формат."""
+    config = load_config()
+    for path in (derived_guide_path(config), profile_path(config)):
+        if path.exists():
+            path.unlink()
+    return style_sources(load_config())
 
 
 # --- индекс ----------------------------------------------------------------

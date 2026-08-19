@@ -128,6 +128,18 @@ ins { background: #b7ebc7; color: var(--add-text); text-decoration: none; border
 del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 0 2px; }
 .diff__equal { opacity: .62; }
 
+.subhead { margin: 22px 0 4px; font-size: 15px; }
+.file-list { display: grid; gap: 6px; margin-top: 10px; }
+.file-list__row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px;
+}
+.file-list__drop { border: 0; background: none; color: var(--danger); cursor: pointer; font: inherit; }
+.format-status { margin-top: 10px; font-size: 13.5px; }
+.format-status--ok { color: var(--ok); }
+.format-status--none { color: var(--muted); }
+details summary { cursor: pointer; font-size: 13.5px; color: var(--accent); margin-top: 10px; }
+
 .review { margin-top: 14px; padding: 14px 16px; border: 1px solid #ffe0b2; background: #fffaf2; border-radius: 10px; }
 .review__title { font-weight: 600; margin-bottom: 8px; font-size: 14px; }
 .review__list { margin: 0; padding-left: 20px; }

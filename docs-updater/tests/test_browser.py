@@ -148,6 +148,23 @@ def test_full_flow_in_browser(live_server):
         assert candidates[0] == "api-auth.md"
         assert "api-auth.md" in page.inner_text("#chosen-doc")
 
+        # обучение формату по образцу: один раз — и дальше применяется само
+        sample = live_server["work"] / "sample-doc.md"
+        sample.write_text(
+            "# Настройка вебхуков\n\n## Назначение\n\nДокумент описывает подключение вебхуков.\n\n"
+            "## Ограничения\n\n- Не более 5 вебхуков на проект.\n",
+            encoding="utf-8",
+        )
+        page.set_input_files("#sample-files", str(sample))
+        page.wait_for_function(
+            "() => document.querySelectorAll('#samples-list [data-sample]').length === 1", timeout=30000
+        )
+        page.uncheck("#learn-with-model")
+        page.click("#learn-format")
+        page.wait_for_selector(".format-status--ok", timeout=60000)
+        assert "Формат изучен по образцам" in page.inner_text("#format-status")
+        assert "Применяется при каждой правке" in page.inner_text("#format-status")
+
         # поиск подставил найденный раздел — писателю не нужно искать его вручную
         page.wait_for_function(
             "() => document.querySelector('#section-hint').textContent.length > 0", timeout=30000
