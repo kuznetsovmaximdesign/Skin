@@ -8,7 +8,7 @@
   }
 
   const { H, html, C, STATUS, Card, CardHead, Body, Row, Stack, Muted, Block,
-          useAsync, useState, useEffect, plural, readValue, popupToBody } = window.UI;
+          useAsync, useState, useEffect, plural, readValue, popupToBody, PANEL_SHADOW } = window.UI;
   const { ScreenChanged, ScreenUpdate } = window.FlowScreens;
   const { ScreenResult } = window.ResultScreen;
   const { ScreenSettings, ScreenRules, ScreenPortal } = window.SetupScreens;
@@ -77,8 +77,7 @@
                      alignSelf: 'flex-start', height: '100vh' }}>
         <div style=${{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
                        background: C.surface, border: '1px solid ' + C.border, borderRadius: '16px',
-                       boxShadow: '0 4px 12px rgba(33,39,47,0.10), 0 2px 4px rgba(33,39,47,0.06)',
-                       overflow: 'hidden' }}>
+                       boxShadow: PANEL_SHADOW, overflow: 'hidden' }}>
           <div style=${{ padding: '16px', borderBottom: '1px solid ' + C.border,
                          display: 'flex', flexDirection: 'column', gap: '8px' }}>
             ${options.length > 1 ? html`
@@ -118,14 +117,10 @@
               const active = item.flow ? FLOW.includes(app.current) : app.current === item.key;
               return html`
                 <div key=${item.key} role="button" tabIndex=${0} data-testid=${'nav-' + item.key}
+                  className=${'nav-item' + (active ? ' nav-item--active' : '')}
+                  aria-current=${active ? 'page' : undefined}
                   onClick=${() => app.go(item.key)}
-                  style=${{ padding: '7px 9px', borderRadius: '8px', fontSize: '13px', lineHeight: '18px',
-                            cursor: 'pointer', display: 'flex', alignItems: 'center',
-                            justifyContent: 'space-between', gap: '8px',
-                            background: active ? C.accentBg : 'transparent',
-                            color: active ? C.accent : C.text,
-                            fontWeight: active ? 600 : 400,
-                            borderLeft: active ? '3px solid ' + C.accent : '3px solid transparent' }}>
+                  onKeyDown=${(event) => { if (event.key === 'Enter' || event.key === ' ') app.go(item.key); }}>
                   <span>${item.label}</span>
                 </div>`;
             })}
@@ -217,7 +212,8 @@
             <${Sidebar} app=${app} />
             <div style=${{ flex: 1, minWidth: 0, height: '100vh', overflowY: 'auto',
                            boxSizing: 'border-box' }}>
-              <div style=${{ maxWidth: '1180px', margin: '0 auto', padding: '0 32px 56px',
+              <div style=${{ maxWidth: '1180px', margin: '0 auto', padding: '0 32px 32px',
+                             minHeight: '100vh', boxSizing: 'border-box',
                              display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 ${FLOW.includes(current) ? html`
                   <div style=${{ position: 'sticky', top: 0, zIndex: 5, background: C.page,

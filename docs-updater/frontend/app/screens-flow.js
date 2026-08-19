@@ -14,7 +14,7 @@ function CandidateCard({ item, onPick }) {
                    display: 'grid', gridTemplateColumns: '1fr 180px', gap: '16px', alignItems: 'start' }}>
       <${Stack} gap=${6} style=${{ minWidth: 0 }}>
         <div style=${{ fontSize: '14px', fontWeight: 600, lineHeight: '20px' }}>${item.title}</div>
-        <div style=${{ fontSize: '12px', color: C.textSec, wordBreak: 'break-all' }}>${item.path}</div>
+        <div style=${{ fontSize: '12px', color: C.textSec, overflowWrap: 'anywhere' }}>${item.path}</div>
         <${Row}>
           ${item.heading ? html`<span style=${{ fontSize: '12px' }}>Раздел: ${item.heading}</span>` : null}
           <${H.Tag} mode=${item.matched_on === 'summary' ? TAG.info : TAG.muted} size="small" readOnly=${true}>
@@ -29,8 +29,6 @@ function CandidateCard({ item, onPick }) {
       <${Stack} gap=${8} style=${{ alignItems: 'flex-start' }}>
         <${Muted}>Совпадение<//>
         <div style=${{ fontSize: '20px', fontWeight: 600, lineHeight: 1 }}>${percent(item.relevance)}</div>
-        <${H.ProgressBar} mode=${item.relevance >= 85 ? 'success' : item.relevance >= 65 ? 'medium' : 'default'}
-          track=${item.relevance} width=${160} size="small" />
         <${H.Button} mode="secondary" size="small" text="Обновить документ"
           onClick=${() => onPick(item)} />
       <//>
@@ -46,7 +44,7 @@ function CoverageRow({ item }) {
                    gridTemplateColumns: '1fr 132px 48px', gap: '10px', alignItems: 'start' }}>
       <${Stack} gap=${3} style=${{ minWidth: 0 }}>
         <div style=${{ fontSize: '13px', fontWeight: 600, lineHeight: '18px' }}>${item.title}</div>
-        <div style=${{ fontSize: '11px', color: C.textMuted, wordBreak: 'break-all' }}>${item.path}</div>
+        <div style=${{ fontSize: '11px', color: C.textMuted, overflowWrap: 'anywhere' }}>${item.path}</div>
         <div style=${{ fontSize: '12px', lineHeight: '16px', color: C.textSec }}>${item.reason || item.summary || ''}</div>
       <//>
       <div><${H.Tag} mode=${TAG[tone]} size="small" readOnly=${true}>${item.action}<//></div>
@@ -130,7 +128,7 @@ function ScreenChanged({ app }) {
   const counter = `${description.length} ${plural(description.length, 'символ', 'символа', 'символов')}`;
 
   return html`
-    <${Stack} gap=${16} style=${{ height: 'calc(100vh - 190px)', minHeight: '460px' }}>
+    <${Stack} gap=${16} style=${{ flex: 1, minHeight: '460px' }}>
       <${PageTitle} title="Что изменилось"
         subtitle="Опишите словами, что изменилось. Сервис найдёт документы, которые надо поправить." />
 

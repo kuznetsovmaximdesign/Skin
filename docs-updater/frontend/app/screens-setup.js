@@ -185,11 +185,11 @@ function ScreenRules({ app }) {
                 <${H.Button} mode="primary" size="small" text="Сохранить правила" loading=${busy === 'guide'}
                   onClick=${() => { setBusy('guide'); Api.saveStyleGuide(guideText)
                     .then(() => { setBusy(''); guide.reload(); }).catch(() => setBusy('')); }} />
-                <div>
-                  <${H.Uploader} size="small" manual=${true} maxCount=${1} description="Файл .md с правилами"
+                <${H.Field} label="Загрузить файл с правилами"
+                  description="Один файл .md — он заменит текст выше"
+                  control=${html`<${H.Uploader} size="small" manual=${true} maxCount=${1}
                     onChange=${(info) => upload(pickFiles(info), (files) => Api.uploadStyleGuide(files[0]),
-                      () => { setText(null); guide.reload(); })} />
-                </div>
+                      () => { setText(null); guide.reload(); })} />`} />
               <//>
             <//>
           <//>
@@ -206,8 +206,10 @@ function ScreenRules({ app }) {
                 emptyText="Дополнительных файлов пока нет."
                 onRemove=${(file) => Api.removeRules(file).then(sources.reload)} />
               <${Note}>Файл пропадёт из списка, но останется на диске.<//>
-              <${H.Uploader} size="small" manual=${true} description="Файлы .md с правилами оформления"
-                onChange=${(info) => upload(pickFiles(info), Api.uploadRules, sources.reload)} />
+              <${H.Field} label="Добавить файлы с правилами"
+                description="Можно выбрать сразу несколько файлов .md"
+                control=${html`<${H.Uploader} size="small" manual=${true}
+                  onChange=${(info) => upload(pickFiles(info), Api.uploadRules, sources.reload)} />`} />
             <//>
           <//>
         <//>
@@ -247,10 +249,10 @@ function ScreenRules({ app }) {
                 emptyText="Образцов пока нет."
                 onRemove=${(file) => Api.removeSample(file).then(samples.reload)} />
               <${Row}>
-                <div>
-                  <${H.Uploader} size="small" manual=${true} description="Готовые документы .md как образцы"
-                    onChange=${(info) => upload(pickFiles(info), Api.uploadSamples, samples.reload)} />
-                </div>
+                <${H.Field} label="Добавить образцы"
+                  description="Готовые документы .md, на которые сервис будет равняться"
+                  control=${html`<${H.Uploader} size="small" manual=${true}
+                    onChange=${(info) => upload(pickFiles(info), Api.uploadSamples, samples.reload)} />`} />
                 <${H.Button} mode="primary" size="small" text="Изучить формат"
                   loading=${busy === 'learn'} onClick=${learn} />
                 <${H.Checkbox} checked=${useModel} onChange=${() => setUseModel(!useModel)}>

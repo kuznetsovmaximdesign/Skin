@@ -10,3 +10,29 @@ a:hover { text-decoration: underline; }
 .no-ds--show { display: block; }
 .no-ds h1 { font-size: 20px; margin: 0 0 12px; }
 .no-ds pre { background: #F2F3F4; padding: 12px 14px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+
+/* Пункт бокового меню. Готового компонента навигации в дизайн-системе нет
+   (её Navigation — это оглавление по прокрутке), поэтому состояния собраны
+   вручную, но цветами дизайн-системы: выделение, наведение, фокус. */
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border-left: 2px solid transparent;
+  font-size: 13px;
+  line-height: 18px;
+  color: #21272F;
+  cursor: pointer;
+}
+.nav-item:hover { background: #F2F3F4; }
+.nav-item:focus-visible { outline: none; box-shadow: 0 0 0 2px #94B4FD; }
+.nav-item--active {
+  background: #EEF2FC;
+  border-left-color: #4269E7;
+  color: #4269E7;
+  font-weight: 600;
+}
+.nav-item--active:hover { background: #E9F0FF; }

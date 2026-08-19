@@ -25,11 +25,45 @@ const TAG = { info: 'marina', ok: 'grey', warn: 'orange', bad: 'red', muted: 'gr
 const STATUS = { ok: 'positive', warn: 'medium', bad: 'critical', info: 'medium' };
 const severityTone = (severity) => (severity === 'error' ? 'bad' : 'warn');
 
+
+/* Тени, фокус и выделение берём из токенов дизайн-системы, а не подбираем на глаз.
+   Форма тени и её цвет лежат в теме отдельно — здесь они собираются в одно значение. */
+function elevation(level) {
+  const theme = H.LIGHT_THEME || {};
+  const shape = ((theme.effects || {}).elevation || {})[level];
+  const color = ((theme.colors || {}).elevation || {})[level];
+  if (!shape || !color) return 'none';
+  return Object.keys(shape).map((key) => `${shape[key]} ${color[key]}`).join(', ');
+}
+
+const ELEVATION = { small: elevation('small'), medium: elevation('medium'), large: elevation('large') };
+
+/* Тень панели. Берём ту, что была у бокового меню, и переиспользуем везде:
+   панели одного уровня не должны отличаться друг от друга. */
+const PANEL_SHADOW = '0 4px 12px rgba(33,39,47,0.10), 0 2px 4px rgba(33,39,47,0.06)';
+
+/* Кольцо фокуса и цвета выделенного пункта — тоже из темы. */
+const FOCUS_RING = (() => {
+  const theme = H.LIGHT_THEME || {};
+  const shape = ((theme.effects || {}).focus || {})['1'];
+  const color = ((theme.colors || {}).focus || {}).stroke;
+  return shape && color ? `${shape} ${color}` : 'none';
+})();
+
+const SELECTED = (() => {
+  const menu = ((H.LIGHT_THEME || {}).colors || {}).menu || {};
+  const selected = menu.selected || {};
+  return {
+    bg: ((selected.bg || {}).enabled) || '#EEF2FC',
+    border: ((selected.border || {}).enabled) || '#94B4FD',
+  };
+})();
+
 /* --- каркасы --------------------------------------------------------------- */
 
 const Card = ({ children, style }) => html`
   <div style=${{ background: C.surface, border: '1px solid ' + C.border, borderRadius: '12px',
-                 ...(style || {}) }}>${children}</div>`;
+                 boxShadow: PANEL_SHADOW, ...(style || {}) }}>${children}</div>`;
 
 const CardHead = ({ title, subtitle, step, right }) => html`
   <div style=${{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 18px',
@@ -60,7 +94,7 @@ const PageTitle = ({ title, subtitle, right }) => html`
   <div style=${{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '16px' }}>
     <div style=${{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
       <${H.Text} type="H4">${title}<//>
-      ${subtitle ? html`<div style=${{ fontSize: '13px', color: C.textSec, wordBreak: 'break-word' }}>${subtitle}</div>` : null}
+      ${subtitle ? html`<div style=${{ fontSize: '13px', color: C.textSec, overflowWrap: 'anywhere' }}>${subtitle}</div>` : null}
     </div>
     ${right || null}
   </div>`;
@@ -163,6 +197,7 @@ window.UI = {
   H, html, C, TAG, STATUS, severityTone,
   Card, CardHead, Body, Row, Stack, PageTitle, Note, Muted,
   Block, ErrorState, EmptyState, LoadingState, DisabledState,
+  ELEVATION, PANEL_SHADOW, FOCUS_RING, SELECTED,
   useAsync, useElapsed, percent, plural, fileName, readValue, popupToBody,
   useState, useEffect, useCallback, useRef, useMemo,
 };
