@@ -212,6 +212,26 @@ $('sample-files').addEventListener('change', async (event) => {
   } catch (error) { showError(error); } finally { idle(); event.target.value = ''; }
 });
 
+async function importFromUrl(save) {
+  const url = $('import-url').value.trim();
+  if (!url) { toast('Вставьте ссылку на страницу справки', true); return; }
+  busy(save ? 'Читаем страницу и сохраняем как образец…' : 'Читаем страницу…');
+  try {
+    const data = save ? await Api.importUrl(url, 'samples') : await Api.importPreview(url);
+    $('import-result').hidden = false;
+    $('import-result').textContent = data.markdown;
+    if (save) {
+      await loadSamples();
+      toast(`Страница сохранена как образец: ${data.file}`);
+    } else {
+      toast(`Прочитано: «${data.title || 'без заголовка'}», ${data.chars} символов`);
+    }
+  } catch (error) { showError(error); } finally { idle(); }
+}
+
+$('import-preview').addEventListener('click', () => importFromUrl(false));
+$('import-save').addEventListener('click', () => importFromUrl(true));
+
 $('learn-format').addEventListener('click', async () => {
   busy('Разбираем образцы и запоминаем формат…');
   try {

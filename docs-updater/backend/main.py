@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import changeset as changeset_module
-from . import article, checks, crosslocale, docmap, docs_config, drift, glossary_sync
+from . import article, checks, crosslocale, docmap, docs_config, drift, glossary_sync, importer
 from . import impact, indexer, languages
 from . import search, sections
 from . import publish, security, style
@@ -252,6 +252,13 @@ class DecideRequest(BaseModel):
     edit_id: str
     accepted: bool
     comment: str = ""
+
+
+class ImportUrlRequest(BaseModel):
+    url: str = Field(min_length=1)
+    # Куда положить: samples — образец формата, docs — документ в папку документации
+    target: str = "samples"
+    file_name: str | None = None
 
 
 class NewArticleRequest(BaseModel):
@@ -863,6 +870,53 @@ def feedback(doc_path: str = "", product: str | None = None) -> dict[str, Any]:
     """Локальный лог: что писатель отклонял раньше."""
     config = load_config_for(product)
     return {"notes": changeset_module.feedback_notes(config, doc_path)}
+
+
+@app.post("/api/import/preview")
+def import_preview(payload: ImportUrlRequest, request: Request, product: str | None = None) -> dict[str, Any]:
+    """Читает справку по ссылке и показывает, что получилось. Ничего не сохраняет."""
+    config = load_config_for(product)
+    role = current_role(request, config)
+    try:
+        result = importer.import_url(config, payload.url)
+    except importer.ImportError_ as error:
+        security.audit(config, "import-denied", role=role, url=payload.url, outcome=error.message)
+        raise HTTPException(status_code=400, detail=error.message + (f" {error.hint}" if error.hint else ""))
+
+    security.audit(config, "import", role=role, url=payload.url, chars=result["chars"])
+    return result
+
+
+@app.post("/api/import/url")
+def import_url_endpoint(payload: ImportUrlRequest, request: Request, product: str | None = None) -> dict[str, Any]:
+    """Импортирует справку по ссылке в образцы или в папку документации."""
+    config = load_config_for(product)
+    role = current_role(request, config)
+    try:
+        result = importer.import_url(config, payload.url)
+    except importer.ImportError_ as error:
+        security.audit(config, "import-denied", role=role, url=payload.url, outcome=error.message)
+        raise HTTPException(status_code=400, detail=error.message + (f" {error.hint}" if error.hint else ""))
+
+    if payload.target == "docs":
+        directory = resolve_path(config["paths"]["docs_dir"])
+    else:
+        directory = samples_dir(config)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    stem = slugify(payload.file_name or result["title"] or Path(payload.url).stem or "imported")
+    target_path = unique_path(directory, stem, ".md")
+    target_path.write_text(result["markdown"], encoding="utf-8")
+
+    security.audit(
+        config, "import", role=role, url=payload.url, chars=result["chars"], saved_as=target_path.name
+    )
+    return {
+        **result,
+        "saved_to": payload.target,
+        "file": target_path.name,
+        "path": str(target_path),
+    }
 
 
 @app.post("/api/article/new")

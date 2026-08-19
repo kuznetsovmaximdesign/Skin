@@ -81,6 +81,14 @@
     <p class="muted">Подложите готовые документы — сервис разберёт их структуру и оформление один раз,
       дальше будет придерживаться этого формата сам.</p>
     <div class="row">
+      <label class="grow">Ссылка на страницу справки
+        <input type="text" id="import-url" placeholder="адрес статьи во внутреннем портале справки">
+      </label>
+      <button class="btn" id="import-preview">Посмотреть</button>
+      <button class="btn" id="import-save">Добавить как образец</button>
+    </div>
+    <pre id="import-result" class="result" hidden></pre>
+    <div class="row">
       <label class="file-btn">Добавить образцы
         <input type="file" id="sample-files" accept=".md,.markdown,.txt" multiple hidden>
       </label>

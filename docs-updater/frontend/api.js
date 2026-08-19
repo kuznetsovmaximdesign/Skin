@@ -62,6 +62,10 @@ const Api = (() => {
     },
     removeRules: (file) => request('/api/style-guides?file=' + encodeURIComponent(file), { method: 'DELETE' }),
 
+    importPreview: (url) => post('/api/import/preview', { url }),
+    importUrl: (url, target, fileName) =>
+      post('/api/import/url', { url, target, file_name: fileName || null }),
+
     samples: () => request('/api/samples'),
     uploadSamples: (files) => {
       const form = new FormData();

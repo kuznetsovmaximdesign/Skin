@@ -63,6 +63,12 @@ DEFAULTS: dict[str, Any] = {
         "portal": {"base_url": "", "auth_env": "PORTAL_TOKEN"},
         "registry": "data/publications.json",
     },
+    "import_web": {
+        "enabled": False,
+        "allowed_hosts": [],
+        "timeout": 30,
+        "user_agent": "docs-updater/1.0 (local)",
+    },
     "security": {
         "auth": "none",
         "tokens": {},

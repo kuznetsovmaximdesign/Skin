@@ -2111,3 +2111,110 @@ def test_crosslocale_findings_appear_in_drift(client):
     kinds = set(data["summary"]["by_kind"])
     assert "structure-mismatch" in kinds
     assert "date-mismatch" in kinds
+
+
+# --- импорт справки по ссылке ----------------------------------------------
+
+
+@pytest.fixture()
+def portal():
+    from tests.fake_portal import FakePortal
+
+    server = FakePortal().start()
+    yield server
+    server.stop()
+
+
+def allow_import(client, portal, enabled: bool = True, hosts: list[str] | None = None) -> None:
+    raw = yaml.safe_load((client.tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["import_web"] = {
+        "enabled": enabled,
+        "allowed_hosts": hosts if hosts is not None else ["127.0.0.1"],
+        "timeout": 10,
+        "user_agent": "docs-updater/test",
+    }
+    (client.tmp_path / "config.yaml").write_text(
+        yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8"
+    )
+
+
+def test_import_is_off_by_default(client, portal):
+    response = client.post("/api/import/preview", json={"url": f"{portal.url}/help/webhooks"})
+    assert response.status_code == 400
+    assert "выключен" in response.json()["detail"]
+    assert portal.requests == []          # ничего не запрашивали
+
+
+def test_import_requires_allowed_host(client, portal):
+    allow_import(client, portal, hosts=["help.internal"])
+    response = client.post("/api/import/preview", json={"url": f"{portal.url}/help/webhooks"})
+    assert response.status_code == 400
+    assert "не в списке разрешённых" in response.json()["detail"]
+    assert portal.requests == []
+
+
+def test_import_preview_converts_page_to_markdown(client, portal):
+    allow_import(client, portal)
+    data = client.post("/api/import/preview", json={"url": f"{portal.url}/help/webhooks"}).json()
+
+    markdown = data["markdown"]
+    assert data["title"] == "Настройка вебхуков"
+    assert data["meta"]["article_id"] == "KB-9001"
+    assert data["meta"]["updated"] == "2026-08-19"
+
+    assert markdown.startswith("# Настройка вебхуков")
+    assert "## Порядок действий" in markdown
+    assert "1. Откройте раздел **Настройки**." in markdown        # список и полужирный
+    assert "> [!WARNING]" in markdown                              # врезка по классу, не по цвету
+    assert "| Параметр | Описание |" in markdown                   # таблица
+    assert "```\ncurl -X POST http://localhost/hook\n```" in markdown
+    assert "![Схема вебхука](" in markdown                         # alt-текст сохранён
+    assert "Навигация" not in markdown and "Подвал сайта" not in markdown
+    assert f"[разделом про лимиты]({portal.url}/limits)" in markdown or "лимиты" in markdown
+
+    assert portal.requests == ["/help/webhooks"]
+    # превью ничего не сохраняет
+    assert client.get("/api/samples").json()["samples"] == []
+
+
+def test_imported_page_can_become_a_sample_or_a_document(client, portal):
+    allow_import(client, portal)
+
+    sample = client.post(
+        "/api/import/url", json={"url": f"{portal.url}/help/webhooks", "target": "samples"}
+    ).json()
+    assert sample["saved_to"] == "samples"
+    assert (client.tmp_path / "samples" / sample["file"]).exists()
+    assert [item["file"] for item in client.get("/api/samples").json()["samples"]] == [sample["file"]]
+
+    document = client.post(
+        "/api/import/url",
+        json={"url": f"{portal.url}/help/webhooks", "target": "docs", "file_name": "webhooks"},
+    ).json()
+    assert document["file"] == "webhooks.md"
+    assert (client.tmp_path / "docs" / "webhooks.md").exists()
+
+
+def test_imported_page_can_be_used_to_learn_the_format(client, portal):
+    allow_import(client, portal)
+    client.post("/api/import/url", json={"url": f"{portal.url}/help/webhooks"})
+    learned = client.post("/api/format/learn", json={"use_model": False}).json()
+    assert learned["profile"]["documents"] == 1
+    assert "Порядок действий" in " ".join(learned["profile"]["typical_sections"]) or learned["text"]
+
+
+def test_import_is_audited_without_page_text(client, portal):
+    allow_import(client, portal)
+    client.post("/api/import/preview", json={"url": f"{portal.url}/help/webhooks"})
+    records = client.get("/api/audit").json()["records"]
+    event = [item for item in records if item["event"] == "import"][-1]
+    assert event["url"].endswith("/help/webhooks")
+    assert event["chars"] > 0
+    assert "вебхук" not in (client.tmp_path / "audit.jsonl").read_text(encoding="utf-8").lower()
+
+
+def test_import_reports_unreachable_page(client, portal):
+    allow_import(client, portal)
+    response = client.post("/api/import/preview", json={"url": f"{portal.url}/missing"})
+    assert response.status_code == 400
+    assert "Не удалось получить страницу" in response.json()["detail"]

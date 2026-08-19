@@ -143,7 +143,14 @@ def test_full_flow_in_browser(live_server):
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=live_server["chromium"], args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1280, "height": 1000})
-        page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
+        # Настоящие ошибки страницы ловит pageerror. В консоли браузер отмечает и коды ответа
+        # (например, наш намеренный отказ импорта с 400) — это не ошибка интерфейса.
+        page.on(
+            "console",
+            lambda message: errors.append(message.text)
+            if message.type == "error" and "Failed to load resource" not in message.text
+            else None,
+        )
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on(
             "request",
@@ -184,6 +191,12 @@ def test_full_flow_in_browser(live_server):
         page.wait_for_selector(".format-status--ok", timeout=60000)
         assert "Формат изучен по образцам" in page.inner_text("#format-status")
         assert "Применяется при каждой правке" in page.inner_text("#format-status")
+
+        # импорт по ссылке выключен: страница честно об этом сообщает
+        page.fill("#import-url", "https://help.example.com/article")
+        page.click("#import-preview")
+        page.wait_for_selector("#warnings .warning--error", timeout=30000)
+        assert "выключен" in page.inner_text("#warnings")
 
         # поиск подставил найденный раздел — писателю не нужно искать его вручную
         page.wait_for_function(
