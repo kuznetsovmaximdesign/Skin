@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as json_module
 import shutil
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend import config as config_module  # noqa: E402
 from backend.diffing import build_diff, split_paragraphs  # noqa: E402
-from backend.generator import build_prompt, check_result  # noqa: E402
+from backend.generator import build_prompt, check_context_size, check_result  # noqa: E402
 from backend.ollama_client import clean_model_output  # noqa: E402
 from backend.search import cosine, to_percent  # noqa: E402
 from tests.fake_ollama import FakeOllama  # noqa: E402
@@ -119,6 +120,42 @@ def test_reindex_on_empty_folder(client):
     response = client.post("/api/reindex")
     assert response.status_code == 400
     assert "нет файлов" in response.json()["detail"]
+
+
+def test_reindex_reuses_embeddings_for_unchanged_sections(client):
+    first = client.post("/api/reindex").json()
+    assert first["reused_sections"] == 0
+    assert first["computed_sections"] == first["sections_count"]
+
+    embed_calls_before = len([r for r in client.ollama.requests if "embed" in r["path"]])
+
+    # меняем один документ — пересчитаться должны только его секции
+    doc = client.tmp_path / "docs" / "api-auth.md"
+    doc.write_text(doc.read_text(encoding="utf-8").replace("60 минут", "120 минут"), encoding="utf-8")
+
+    second = client.post("/api/reindex").json()
+    assert second["computed_sections"] == 1
+    assert second["reused_sections"] == second["sections_count"] - 1
+    embed_calls_after = len([r for r in client.ollama.requests if "embed" in r["path"]])
+    assert embed_calls_after - embed_calls_before == 1
+
+
+def test_reindex_recomputes_everything_when_model_changes(client):
+    first = client.post("/api/reindex").json()
+    client.ollama.models = ["qwen3:latest", "bge-m3:latest", "nomic-embed-text:latest"]
+    client.post("/api/config", json={"embedding_model": "nomic-embed-text"})
+
+    second = client.post("/api/reindex").json()
+    assert second["reused_sections"] == 0
+    assert second["computed_sections"] == first["sections_count"]
+
+
+def test_reindex_drops_deleted_documents(client):
+    client.post("/api/reindex")
+    (client.tmp_path / "docs" / "export-reports.md").unlink()
+    second = client.post("/api/reindex").json()
+    assert second["documents_count"] == 2
+    assert {doc["path"] for doc in second["documents"]} == {"api-auth.md", "install-agent.md"}
 
 
 # --- поиск -----------------------------------------------------------------
@@ -245,6 +282,49 @@ def test_apply_makes_backup_and_overwrites(client):
     assert backup.exists() and backup.read_text(encoding="utf-8") == original
 
 
+def test_apply_refreshes_index(client):
+    client.post("/api/reindex")
+    data = client.post(
+        "/api/generate",
+        json={"doc_path": "api-auth.md", "change_description": "Срок жизни токена — 120 минут."},
+    ).json()
+
+    applied = client.post(
+        "/api/apply", json={"doc_path": "api-auth.md", "result_path": data["result_file"]}
+    ).json()
+
+    assert applied["index_updated"] is True
+    index = json_module.loads((client.tmp_path / "index.json").read_text(encoding="utf-8"))
+    texts = " ".join(section["text"] for section in index["sections"] if section["doc_path"] == "api-auth.md")
+    assert "120 минут" in texts
+
+
+def test_apply_without_ollama_keeps_working(client):
+    client.post("/api/reindex")
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+    client.ollama.stop()
+
+    applied = client.post(
+        "/api/apply", json={"doc_path": "api-auth.md", "result_path": data["result_file"]}
+    ).json()
+    assert applied["applied"] is True
+    assert applied["index_updated"] is False
+
+
+def test_results_history(client):
+    assert client.get("/api/results").json()["results"] == []
+
+    for description in ("первая правка", "вторая правка"):
+        client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": description})
+
+    results = client.get("/api/results").json()["results"]
+    assert len(results) == 2
+    assert all(item["file"].endswith(".md") and item["size"] > 0 for item in results)
+    assert results[0]["saved_at"] >= results[1]["saved_at"]
+
+
 # --- гайд и настройки ------------------------------------------------------
 
 
@@ -332,6 +412,12 @@ def test_check_result_flags_placeholders():
     assert any("спорно" in warning for warning in warnings)
 
 
+def test_check_context_size_warns_when_document_is_too_big():
+    assert check_context_size("x" * 300, "x" * 300, num_ctx=16384) == []
+    warnings = check_context_size("x" * 90000, "x" * 60000, num_ctx=8192)
+    assert warnings and "num_ctx" in warnings[0]
+
+
 def test_build_prompt_without_guide():
     prompt = build_prompt("# Док", "изменение", "", "doc.md")
     assert "гайд по стилю не подключён" in prompt
@@ -373,3 +459,18 @@ def test_frontend_has_no_external_assets():
     for tag in ("src=", "href="):
         for value in [part.split('"')[1] for part in html.split(tag)[1:] if '"' in part]:
             assert not value.startswith(("http://", "https://", "//")), value
+
+
+def test_two_results_in_the_same_second_do_not_overwrite(client):
+    first = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "первая"}
+    ).json()
+    client.ollama.generate_response = "# Авторизация в API\n\nВторой вариант текста документа."
+    second = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "вторая"}
+    ).json()
+
+    assert first["result_file"] != second["result_file"]
+    output = client.tmp_path / "output"
+    assert (output / first["result_file"]).read_text(encoding="utf-8") == first["updated"]
+    assert (output / second["result_file"]).read_text(encoding="utf-8") == second["updated"]

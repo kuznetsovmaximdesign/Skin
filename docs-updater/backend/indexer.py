@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -107,7 +108,13 @@ def embedding_input(section: Section) -> str:
     return f"Документ: {section.doc_title}\nРаздел: {section.heading}\n\n{section.text}"
 
 
+def section_hash(text: str) -> str:
+    """Отпечаток секции: по нему переиспользуем ранее посчитанные эмбеддинги."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
 def build_index(config: dict[str, Any], client: OllamaClient) -> dict[str, Any]:
+    """Строит индекс. Секции, которые не изменились с прошлого раза, не пересчитываются."""
     docs_dir = resolve_path(config["paths"]["docs_dir"])
     model = config["ollama"]["embedding_model"]
     max_chars = int(config["search"]["chunk_max_chars"])
@@ -133,24 +140,46 @@ def build_index(config: dict[str, Any], client: OllamaClient) -> dict[str, Any]:
             }
         )
 
-    vectors: list[list[float]] = []
-    batch_size = 16
     inputs = [embedding_input(section) for section in sections]
-    for start in range(0, len(inputs), batch_size):
-        vectors.extend(client.embed(model, inputs[start : start + batch_size]))
+    hashes = [section_hash(text) for text in inputs]
+
+    known = reusable_embeddings(config, model, str(docs_dir))
+    missing = [text for text, digest in zip(inputs, hashes) if digest not in known]
+    fresh: dict[str, list[float]] = {}
+    batch_size = 16
+    for start in range(0, len(missing), batch_size):
+        batch = missing[start : start + batch_size]
+        for text, vector in zip(batch, client.embed(model, batch)):
+            fresh[section_hash(text)] = vector
+
+    vectors = [known.get(digest) or fresh.get(digest, []) for digest in hashes]
 
     index = {
-        "version": 1,
+        "version": 2,
         "docs_dir": str(docs_dir),
         "embedding_model": model,
         "documents": documents,
+        "reused_sections": len(sections) - len(missing),
+        "computed_sections": len(missing),
         "sections": [
-            {**asdict(section), "embedding": vector}
-            for section, vector in zip(sections, vectors)
+            {**asdict(section), "hash": digest, "embedding": vector}
+            for section, digest, vector in zip(sections, hashes, vectors)
         ],
     }
     save_index(config, index)
     return index
+
+
+def reusable_embeddings(config: dict[str, Any], model: str, docs_dir: str) -> dict[str, list[float]]:
+    """Эмбеддинги из прошлого индекса — годятся, только если та же модель и та же папка."""
+    previous = load_index(config)
+    if not previous or previous.get("embedding_model") != model or previous.get("docs_dir") != docs_dir:
+        return {}
+    return {
+        section["hash"]: section["embedding"]
+        for section in previous.get("sections", [])
+        if section.get("hash") and section.get("embedding")
+    }
 
 
 def index_path(config: dict[str, Any]) -> Path:
@@ -179,6 +208,8 @@ def index_summary(index: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "exists": True,
         "docs_dir": index.get("docs_dir", ""),
+        "reused_sections": index.get("reused_sections", 0),
+        "computed_sections": index.get("computed_sections", len(index.get("sections", []))),
         "embedding_model": index.get("embedding_model", ""),
         "documents": index.get("documents", []),
         "documents_count": len(index.get("documents", [])),

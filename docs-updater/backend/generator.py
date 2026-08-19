@@ -7,6 +7,8 @@ from typing import Any
 from .ollama_client import OllamaClient
 
 MAX_GUIDE_CHARS = 12000
+# Грубая оценка: для русского текста примерно 3 символа на токен.
+CHARS_PER_TOKEN = 3
 
 SYSTEM_PROMPT = """Ты — технический редактор документации. Ты обновляешь существующие Markdown-документы.
 
@@ -56,16 +58,38 @@ def generate_update(
     model = config["ollama"]["generation_model"]
     client.ensure_model(model)
 
+    num_ctx = int(config["generation"]["num_ctx"])
     prompt = build_prompt(document, change_description, style_guide, doc_path)
+    size_warnings = check_context_size(prompt, document, num_ctx)
     updated = client.generate(
         model=model,
         prompt=prompt,
         system=SYSTEM_PROMPT,
         temperature=float(config["generation"]["temperature"]),
-        num_ctx=int(config["generation"]["num_ctx"]),
+        num_ctx=num_ctx,
     )
 
-    return {"content": updated, "warnings": check_result(document, updated), "model": model}
+    return {
+        "content": updated,
+        "warnings": size_warnings + check_result(document, updated),
+        "model": model,
+    }
+
+
+def estimate_tokens(text: str) -> int:
+    return len(text) // CHARS_PER_TOKEN
+
+
+def check_context_size(prompt: str, document: str, num_ctx: int) -> list[str]:
+    """Модель должна вместить и запрос, и ответ. Если не влезает — предупреждаем заранее."""
+    needed = estimate_tokens(prompt) + estimate_tokens(document)
+    if needed <= num_ctx:
+        return []
+    return [
+        f"Документ и гайд не помещаются в окно модели: нужно примерно {needed} токенов, "
+        f"а в config.yaml указано num_ctx: {num_ctx}. Увеличьте `generation.num_ctx` "
+        "или сократите гайд — иначе часть документа может потеряться."
+    ]
 
 
 def check_result(original: str, updated: str) -> list[str]:

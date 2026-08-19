@@ -106,6 +106,20 @@ async function loadDocuments() {
     data.documents.map((doc) => `<option value="${escapeHtml(doc.path)}">${escapeHtml(doc.title)} (${escapeHtml(doc.path)})</option>`).join('');
 }
 
+async function loadResults() {
+  const data = await api('/api/results');
+  const box = $('results-list');
+  if (!data.results.length) {
+    box.innerHTML = '<p class="muted">Пока пусто. Обновлённые документы появятся здесь.</p>';
+    return;
+  }
+  box.innerHTML = data.results.map((item) => `
+    <div class="result-row">
+      <a href="/api/download?file=${encodeURIComponent(item.file)}">${escapeHtml(item.file)}</a>
+      <span class="result-row__meta">${escapeHtml(item.saved_at)} · ${Math.round(item.size / 1024)} КБ</span>
+    </div>`).join('');
+}
+
 async function loadGuide() {
   const data = await api('/api/style-guide');
   $('guide-text').value = data.content || '';
@@ -213,7 +227,10 @@ $('reindex').addEventListener('click', async () => {
     const index = await json('/api/reindex', {});
     await loadStatus();
     await loadDocuments();
-    toast(`Индекс готов: ${index.documents_count} документов, ${index.sections_count} секций`);
+    const reused = index.reused_sections
+      ? `, переиспользовано без пересчёта: ${index.reused_sections}`
+      : '';
+    toast(`Индекс готов: ${index.documents_count} документов, ${index.sections_count} секций${reused}`);
   } catch (error) { showError(error); } finally { idle(); }
 });
 
@@ -274,6 +291,7 @@ $('generate').addEventListener('click', async () => {
     $('result-file').textContent = data.result_path;
     $('step-diff').hidden = false;
     $('step-diff').scrollIntoView({ behavior: 'smooth' });
+    await loadResults();
     if (!data.diff.has_changes) toast('Модель ничего не изменила — уточните описание правки', true);
     else toast('Готово. Оригинал не тронут, результат сохранён отдельным файлом.');
   } catch (error) { showError(error); } finally { idle(); }
@@ -308,7 +326,11 @@ $('apply').addEventListener('click', async () => {
       doc_path: state.result.doc_path,
       result_path: state.result.result_file,
     });
-    toast(`Оригинал обновлён. Резервная копия: ${data.backup}`);
+    await loadStatus();
+    toast(
+      `Оригинал обновлён. Резервная копия: ${data.backup}.` +
+      (data.index_updated ? ' Индекс обновлён.' : ' Индекс не обновлён — нажмите «Переиндексировать».')
+    );
   } catch (error) { showError(error); } finally { idle(); }
 });
 
@@ -319,5 +341,6 @@ $('apply').addEventListener('click', async () => {
     await loadStatus();
     await loadDocuments();
     await loadGuide();
+    await loadResults();
   } catch (error) { showError(error); }
 })();

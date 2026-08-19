@@ -134,6 +134,15 @@ del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 
   font-size: 13px; max-height: 640px; overflow: auto;
 }
 
+.results-list { margin-top: 12px; display: grid; gap: 6px; }
+.result-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px;
+}
+.result-row a { color: var(--accent); text-decoration: none; }
+.result-row a:hover { text-decoration: underline; }
+.result-row__meta { color: var(--muted); font-size: 12.5px; }
+
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
   background: #1c1f24; color: #fff; padding: 11px 16px; border-radius: 9px; font-size: 14px;

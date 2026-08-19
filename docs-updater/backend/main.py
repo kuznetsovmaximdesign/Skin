@@ -53,6 +53,16 @@ def read_style_guide(config: dict[str, Any]) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def unique_path(directory: Path, stem: str, suffix: str) -> Path:
+    """Не перезаписываем ранее сохранённый результат, даже если он создан в ту же секунду."""
+    candidate = directory / f"{stem}{suffix}"
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
 def slugify(value: str) -> str:
     return re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("_") or "document"
 
@@ -261,8 +271,9 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
     output_dir = resolve_path(config["paths"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_name = f"{slugify(Path(payload.doc_path).stem)}.{stamp}.md"
-    out_path = output_dir / out_name
+    stem = slugify(Path(payload.doc_path).stem)
+    out_path = unique_path(output_dir, f"{stem}.{stamp}", ".md")
+    out_name = out_path.name
     out_path.write_text(updated, encoding="utf-8")
 
     return {
@@ -289,6 +300,27 @@ def download(file: str) -> FileResponse:
     return FileResponse(target, media_type="text/markdown", filename=target.name)
 
 
+@app.get("/api/results")
+def results(limit: int = 20) -> dict[str, Any]:
+    """Ранее сохранённые результаты — чтобы ничего не потерялось между сессиями."""
+    config = load_config()
+    output_dir = resolve_path(config["paths"]["output_dir"])
+    if not output_dir.exists():
+        return {"output_dir": str(output_dir), "results": []}
+    files = sorted(output_dir.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return {
+        "output_dir": str(output_dir),
+        "results": [
+            {
+                "file": path.name,
+                "size": path.stat().st_size,
+                "saved_at": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            }
+            for path in files[:limit]
+        ],
+    }
+
+
 @app.post("/api/apply")
 def apply(payload: ApplyRequest) -> dict[str, Any]:
     """Явное подтверждение записи в оригинал. Перед перезаписью делается .bak."""
@@ -305,7 +337,22 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
     backup = source.with_suffix(source.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(source, backup)
     source.write_text(result_file.read_text(encoding="utf-8"), encoding="utf-8")
-    return {"applied": True, "doc_path": payload.doc_path, "backup": backup.name}
+
+    # Индекс устарел: пересобираем его (пересчитаются только изменившиеся секции).
+    index_updated = False
+    if indexer.load_index(config):
+        try:
+            indexer.build_index(config, get_client(config))
+            index_updated = True
+        except OllamaError:
+            index_updated = False
+
+    return {
+        "applied": True,
+        "doc_path": payload.doc_path,
+        "backup": backup.name,
+        "index_updated": index_updated,
+    }
 
 
 # --- фронтенд --------------------------------------------------------------
