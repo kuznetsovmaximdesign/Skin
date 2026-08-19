@@ -92,6 +92,7 @@
           <option value="">весь документ целиком</option>
         </select>
       </label>
+      <span class="muted" id="section-hint"></span>
       <button class="btn btn--primary" id="generate" disabled>Обновить по гайду</button>
     </div>
     <div class="hint">Правка одного раздела безопаснее и быстрее: остальной текст документа модель вообще не видит и не может испортить.</div>
@@ -114,11 +115,13 @@
           <button class="tab" data-view="preview">Превью с подсветкой</button>
           <button class="tab" data-view="result">Исходный текст</button>
         </div>
+        <button class="btn" id="review">Проверить по гайду</button>
         <button class="btn" id="download">Скачать обновлённый .md</button>
         <button class="btn btn--danger" id="apply">Заменить оригинал</button>
       </div>
     </div>
     <div id="diff-view" class="diff"></div>
+    <div id="review-notes" class="review" hidden></div>
     <div id="preview-pane" hidden>
       <div class="row">
         <label class="check"><input type="checkbox" id="show-removed"> показывать удалённые куски</label>

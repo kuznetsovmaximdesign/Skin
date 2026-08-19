@@ -706,3 +706,52 @@ def test_think_filter_survives_split_tags():
     filtered = ThinkFilter()
     parts = ["Начало ", "<thi", "nk>рассуж", "дения</thi", "nk>", " конец"]
     assert "".join(filtered.feed(part) for part in parts) + filtered.flush() == "Начало  конец"
+
+
+# --- проверка по гайду -----------------------------------------------------
+
+
+def test_review_returns_notes(client):
+    data = client.post("/api/review", json={"content": "# Док\n\nТокен действует 120 минут."}).json()
+    assert data["notes"] == [
+        "«Токен действует 120 минут.» — по гайду версии пишем полностью",
+        "«Не более 10 запросов» — уточните единицу времени",
+    ]
+    assert data["model"] == "qwen3"
+
+    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    assert "ПРОВЕРКА ПО ГАЙДУ" in prompt
+    assert "Гайд по стилю технической документации" in prompt
+
+
+def test_review_without_style_guide(client):
+    client.put("/api/style-guide", json={"content": "   "})
+    response = client.post("/api/review", json={"content": "# Док\n\nТекст."})
+    assert response.status_code == 400
+    assert "Гайд по стилю пуст" in response.json()["detail"]
+
+
+def test_review_reports_missing_model(client):
+    client.ollama.models = ["bge-m3:latest"]
+    response = client.post("/api/review", json={"content": "# Док"})
+    assert response.status_code == 503
+    assert "ollama pull qwen3" in response.json()["hint"]
+
+
+def test_review_when_nothing_found(client):
+    client.ollama.review_response = "Нарушений не найдено"
+    data = client.post("/api/review", json={"content": "# Док\n\nТекст."}).json()
+    assert data["notes"] == []
+
+
+def test_search_candidates_expose_the_matching_section(client):
+    client.post("/api/reindex")
+    candidates = client.post(
+        "/api/search", json={"query": "срок жизни токена доступа увеличен"}
+    ).json()["candidates"]
+    assert candidates[0]["heading"] == "Авторизация в API > Срок жизни токена"
+    # такой же путь есть в оглавлении документа — значит раздел можно подставить автоматически
+    outline_paths = [
+        section["path"] for section in client.get("/api/outline", params={"path": "api-auth.md"}).json()["sections"]
+    ]
+    assert candidates[0]["heading"] in outline_paths

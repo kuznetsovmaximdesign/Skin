@@ -30,6 +30,11 @@ class FakeOllama:
         self.generate_response: str | None = None
         # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
         self.chunk_delay = 0.0
+        self.review_response = (
+            "- «Токен действует 120 минут.» — по гайду версии пишем полностью\n"
+            "2. «Не более 10 запросов» — уточните единицу времени\n"
+            "пояснение, которое не является замечанием"
+        )
         self.requests: list[dict] = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server = server
@@ -115,6 +120,8 @@ class FakeOllama:
 
     def render(self, prompt: str) -> str:
         """По умолчанию возвращает присланный текст (документ или раздел) с одной правкой."""
+        if "ПРОВЕРКА ПО ГАЙДУ" in prompt:
+            return self.review_response
         if self.generate_response is not None:
             return self.generate_response
         match = re.search(

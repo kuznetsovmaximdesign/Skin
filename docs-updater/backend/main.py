@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from . import indexer, search, sections
 from .config import load_config, resolve_path, save_config
 from .diffing import build_diff, unified_diff
-from .generator import check_result, generate_update, prepare_generation
+from .generator import check_result, generate_update, prepare_generation, review_document
 from .ollama_client import OllamaClient, OllamaError, clean_model_output
 
 app = FastAPI(title="Локальный сервис обновления документации", version="1.0.0")
@@ -113,6 +113,10 @@ class GenerateRequest(BaseModel):
     change_description: str = Field(min_length=1)
     # Номер раздела из /api/outline. None — правим документ целиком.
     section_index: int | None = None
+
+
+class ReviewRequest(BaseModel):
+    content: str = Field(min_length=1)
 
 
 class SaveResultRequest(BaseModel):
@@ -485,6 +489,20 @@ def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
         )
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/review")
+def review_endpoint(payload: ReviewRequest) -> dict[str, Any]:
+    """Проверка готового текста по гайду вторым проходом модели."""
+    config = load_config()
+    style_guide = read_style_guide(config)
+    if not style_guide.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Гайд по стилю пуст — проверять не по чему. Загрузите гайд в шаге 2.",
+        )
+    result = review_document(config, get_client(config), payload.content, style_guide)
+    return {"notes": result["notes"], "raw": result["raw"], "model": result["model"]}
 
 
 @app.get("/api/download")

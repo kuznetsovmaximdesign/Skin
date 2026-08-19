@@ -128,6 +128,12 @@ ins { background: #b7ebc7; color: var(--add-text); text-decoration: none; border
 del { background: #f7c3c0; color: var(--del-text); border-radius: 3px; padding: 0 2px; }
 .diff__equal { opacity: .62; }
 
+.review { margin-top: 14px; padding: 14px 16px; border: 1px solid #ffe0b2; background: #fffaf2; border-radius: 10px; }
+.review__title { font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+.review__list { margin: 0; padding-left: 20px; }
+.review__list li { margin-bottom: 6px; font-size: 14px; }
+.review__ok { color: var(--ok); font-size: 14px; }
+
 /* --- превью документа с подсветкой --- */
 .preview {
   margin-top: 14px; padding: 26px 30px; background: #fff; border: 1px solid var(--line);

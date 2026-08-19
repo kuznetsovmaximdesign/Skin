@@ -158,19 +158,21 @@ async function loadGuide() {
 
 /* ---------- шаг 3: поиск документа ---------- */
 
-function selectDoc(path, title) {
+function selectDoc(path, title, heading) {
   state.doc = { path, title: title || path };
   $('chosen-doc').textContent = `Выбран документ: ${state.doc.title} (${path})`;
   $('generate').disabled = false;
   document.querySelectorAll('.candidate').forEach((node) => {
     node.classList.toggle('candidate--active', node.dataset.path === path);
   });
-  loadOutline(path);
+  loadOutline(path, heading);
 }
 
-async function loadOutline(path) {
+async function loadOutline(path, heading) {
   const select = $('section-select');
+  const hint = $('section-hint');
   select.disabled = true;
+  hint.textContent = '';
   select.innerHTML = '<option value="">весь документ целиком</option>';
   try {
     const data = await api('/api/outline?path=' + encodeURIComponent(path));
@@ -180,6 +182,13 @@ async function loadOutline(path) {
         return `<option value="${section.index}">${escapeHtml(indent + section.title)}</option>`;
       }).join('');
     select.disabled = false;
+
+    // Поиск уже нашёл наиболее похожий раздел — подставляем его, но не навязываем.
+    const match = heading && data.sections.find((section) => section.path === heading && section.level > 1);
+    if (match) {
+      select.value = String(match.index);
+      hint.textContent = `раздел подставлен поиском — можно поменять`;
+    }
   } catch (error) {
     select.disabled = true;
   }
@@ -192,16 +201,16 @@ function renderCandidates(candidates) {
     return;
   }
   box.innerHTML = candidates.map((item) => `
-    <div class="candidate" data-path="${escapeHtml(item.path)}" data-title="${escapeHtml(item.title)}">
+    <div class="candidate" data-path="${escapeHtml(item.path)}" data-title="${escapeHtml(item.title)}" data-heading="${escapeHtml(item.heading || '')}">
       <div class="candidate__title">${escapeHtml(item.title)}</div>
       <div class="candidate__score">${item.relevance}%<div class="bar"><span style="width:${item.relevance}%"></span></div></div>
       <div class="candidate__path mono">${escapeHtml(item.path)}${item.heading ? ' · ' + escapeHtml(item.heading) : ''}</div>
       <div class="candidate__snippet">${escapeHtml(item.snippet)}</div>
     </div>`).join('');
   box.querySelectorAll('.candidate').forEach((node) => {
-    node.addEventListener('click', () => selectDoc(node.dataset.path, node.dataset.title));
+    node.addEventListener('click', () => selectDoc(node.dataset.path, node.dataset.title, node.dataset.heading));
   });
-  selectDoc(candidates[0].path, candidates[0].title);
+  selectDoc(candidates[0].path, candidates[0].title, candidates[0].heading);
 }
 
 /* ---------- шаг 5: diff ---------- */
@@ -431,7 +440,7 @@ $('manual-doc').addEventListener('change', (event) => {
 });
 
 function setResultButtons(enabled) {
-  ['save-edits', 'download', 'apply'].forEach((id) => { $(id).disabled = !enabled; });
+  ['save-edits', 'download', 'apply', 'review'].forEach((id) => { $(id).disabled = !enabled; });
 }
 
 function showTab(view) {
@@ -494,6 +503,7 @@ async function generateStreaming(body) {
       $('diff-stats').textContent = '';
       renderWarnings(event.warnings || []);
       setResultButtons(false);
+      $('review-notes').hidden = true;
       showTab('result');
       $('step-diff').scrollIntoView({ behavior: 'smooth' });
       idle();
@@ -588,6 +598,27 @@ $('save-edits').addEventListener('click', async () => {
     countMarks(data.updated);
     await loadResults();
     toast('Правки сохранены, сравнение пересчитано');
+  } catch (error) { showError(error); } finally { idle(); }
+});
+
+function renderReview(notes) {
+  const box = $('review-notes');
+  box.hidden = false;
+  if (!notes.length) {
+    box.innerHTML = '<div class="review__ok">Модель не нашла нарушений гайда.</div>';
+    return;
+  }
+  box.innerHTML = `<div class="review__title">Замечания по гайду (${notes.length}):</div>
+    <ul class="review__list">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
+}
+
+$('review').addEventListener('click', async () => {
+  if (!state.result) return;
+  busy('Модель сверяет текст с гайдом…');
+  try {
+    const data = await json('/api/review', { content: $('result-view').value || state.result.updated });
+    renderReview(data.notes);
+    toast(data.notes.length ? `Замечаний по гайду: ${data.notes.length}` : 'Нарушений гайда не найдено');
   } catch (error) { showError(error); } finally { idle(); }
 });
 

@@ -148,6 +148,16 @@ def test_full_flow_in_browser(live_server):
         assert candidates[0] == "api-auth.md"
         assert "api-auth.md" in page.inner_text("#chosen-doc")
 
+        # поиск подставил найденный раздел — писателю не нужно искать его вручную
+        page.wait_for_function(
+            "() => document.querySelector('#section-hint').textContent.length > 0", timeout=30000
+        )
+        assert "подставлен поиском" in page.inner_text("#section-hint")
+        assert page.eval_on_selector("#section-select option:checked", "e => e.textContent").strip() == (
+            "— Срок жизни токена"
+        )
+        page.select_option("#section-select", index=0)  # дальше правим документ целиком
+
         # список разделов документа подтянулся
         page.wait_for_function("() => !document.querySelector('#section-select').disabled", timeout=30000)
         options = page.eval_on_selector_all("#section-select option", "els => els.map(e => e.textContent.trim())")
@@ -212,6 +222,12 @@ def test_full_flow_in_browser(live_server):
         page.check("#show-removed")
         assert page.eval_on_selector_all(".preview__removed", "els => els.length") > 0
         page.uncheck("#show-removed")
+
+        # проверка готового текста по гайду
+        page.click("#review")
+        page.wait_for_selector("#review-notes:not([hidden])", timeout=60000)
+        assert "Замечания по гайду" in page.inner_text("#review-notes")
+        assert page.eval_on_selector_all("#review-notes li", "els => els.length") == 2
 
         # сохранённые результаты видны на странице (список обновляется после генерации)
         page.wait_for_function(

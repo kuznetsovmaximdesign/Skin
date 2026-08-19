@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .ollama_client import OllamaClient
@@ -56,6 +57,66 @@ def build_prompt(document: str, change_description: str, style_guide: str, doc_p
 
 Внеси описанное изменение в исходный документ по правилам гайда по стилю.
 Верни полный обновлённый Markdown-документ и ничего кроме него."""
+
+
+REVIEW_SYSTEM = """Ты — редактор, который проверяет документ на соответствие гайду по стилю.
+
+Правила ответа:
+1. Выпиши только реальные нарушения гайда. Если нарушений нет — ответь строкой «Нарушений не найдено».
+2. Каждое замечание — отдельная строка вида: - «короткая цитата из документа» — какое правило гайда нарушено и что сделать.
+3. Не придумывай правил, которых нет в гайде. Не пересказывай документ и не переписывай его.
+4. Не больше 10 замечаний, самые важные — первыми.
+5. Никаких вступлений и выводов, только список строк."""
+
+
+def build_review_prompt(document: str, style_guide: str) -> str:
+    guide = (style_guide or "").strip()
+    if len(guide) > MAX_GUIDE_CHARS:
+        guide = guide[:MAX_GUIDE_CHARS] + "\n\n[гайд обрезан по длине]"
+    return f"""# ГАЙД ПО СТИЛЮ
+
+{guide}
+
+# ПРОВЕРКА ПО ГАЙДУ — ДОКУМЕНТ
+
+{document}
+
+# ЗАДАНИЕ
+
+Проверь документ на соответствие гайду и перечисли нарушения списком."""
+
+
+def review_document(
+    config: dict[str, Any],
+    client: OllamaClient,
+    document: str,
+    style_guide: str,
+) -> dict[str, Any]:
+    """Второй проход модели: сверяет готовый текст с гайдом и возвращает список замечаний."""
+    model = config["ollama"]["generation_model"]
+    client.ensure_model(model)
+    answer = client.generate(
+        model=model,
+        prompt=build_review_prompt(document, style_guide),
+        system=REVIEW_SYSTEM,
+        temperature=float(config["generation"]["temperature"]),
+        num_ctx=int(config["generation"]["num_ctx"]),
+    )
+    return {"notes": parse_review_notes(answer), "raw": answer, "model": model}
+
+
+def parse_review_notes(answer: str) -> list[str]:
+    """Достаёт замечания из ответа модели: строки списка, максимум десять."""
+    notes: list[str] = []
+    for line in (answer or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if text.startswith(("- ", "* ", "• ")):
+            notes.append(text[2:].strip())
+        elif re.match(r"^\d+[.)]\s+", text):
+            notes.append(re.sub(r"^\d+[.)]\s+", "", text).strip())
+    return [note for note in notes if note][:10]
 
 
 def build_section_prompt(
