@@ -111,6 +111,8 @@ def client(tmp_path, monkeypatch, fake_ollama):
             "schema": True,
             "prose_rules": "style-rules.yaml",
             "template_schema": "template.schema.yaml",
+            # артефакты разбора портала лежат в репозитории
+            "docs_config_dir": str(REPO_ROOT.parent / "docs-config"),
             "max_line_length": 120,
             "bullet_marker": "-",
             "require_fence_language": True,
@@ -1094,13 +1096,14 @@ def test_generation_fixes_violations_and_keeps_the_better_version(client):
     # …а на запрос починки вернула чистый вариант
     client.ollama.fix_response = (
         "# Вход в систему\n\n## Назначение\n\nПользователь должен войти.\n\n"
-        "## Ограничения\n\n- Одна сессия на пользователя.\n"
+        "## Ограничения\n\n- Одна сессия на пользователя.\n\n"
+        "Идентификатор статьи: DOC-0009. Дата обновления: 2026-08-19.\n"
     )
     data = client.post(
         "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
     ).json()
 
-    assert data["checks"]["fix_iterations"] == 1
+    assert data["checks"]["fix_iterations"] >= 1
     assert "Пользователь должен войти" in data["updated"]
     assert "Юзер" not in data["updated"]
     assert data["checks"]["summary"]["errors"] == 0
@@ -1500,7 +1503,11 @@ def test_new_article_follows_the_template(client):
 
     assert data["sections"] == ["Назначение", "Ограничения", "Предварительные условия"]
     text = data["text"]
-    assert text.startswith("# Настройка вебхуков")
+    # черновик сразу получает блок метаданных своего типа и профиля
+    assert text.startswith("---")
+    assert f"type_id: {data['type_id']}" in text
+    assert "article_id: [уточнить]" in text
+    assert "# Настройка вебхуков" in text
     for section in ("## Назначение", "## Ограничения", "## Предварительные условия"):
         assert section in text
     assert "[уточнить]" in text  # где данных не хватило — пометка, а не выдумка
@@ -1860,3 +1867,152 @@ def test_publication_events_are_audited_without_text(client, targets):
     assert event["doc"] == "api-auth.md"
     assert sorted(event["targets"]) == ["confluence", "portal"]
     assert "Токен действует" not in (client.tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+
+
+# --- docs-config: профили, типы статей, KDOC-правила ------------------------
+
+
+def fixture(name: str) -> str:
+    return (REPO_ROOT / "tests" / "fixtures" / f"{name}.md").read_text(encoding="utf-8")
+
+
+def describe(text: str) -> dict:
+    from backend.checks import describe_document
+
+    return describe_document(text, config_module.load_config())
+
+
+def check_text(text: str):
+    from backend.checks import run_checks
+
+    return run_checks(text, config_module.load_config())
+
+
+def test_docs_config_is_the_source_of_truth(client):
+    data = client.get("/api/docs-config").json()
+    assert data["files"]["schemas"]["present"] is True
+    assert len(data["types"]) == 10                     # десять типов статей из разбора
+    assert set(data["profiles"]) == {"legacy_help", "modern_help", "modern_kb"}
+    assert data["admonition_types"] == ["note", "warning", "important", "example"]
+    assert {rule["id"] for rule in data["kdoc"]} >= {
+        "KDOC-ADMONITION-TYPE", "KDOC-LEADIN", "KDOC-RESULT", "KDOC-UI-BOLD",
+        "KDOC-TABLE-FOR-PARALLEL", "KDOC-FOOTER-META", "KDOC-ABBR-EXPANSION",
+        "KDOC-IMAGE-ALT", "KDOC-CROSSLOCALE",
+    }
+    assert "MD013" in data["markdownlint_codes"]
+    assert data["glossary"]["terms"] > 0
+    assert "KUMA" in data["glossary"]["do_not_translate"]
+    assert data["errors"] == []
+
+
+def test_profile_from_front_matter_and_heuristics():
+    assert describe(fixture("howto_modern_help"))["profile"] == "modern_help"
+
+    legacy = describe(fixture("howto_legacy_help"))
+    assert legacy["profile"] == "legacy_help"
+    assert "подвал" in legacy["profile_source"]
+
+    kb = describe(fixture("troubleshooting_modern_kb"))
+    assert kb["profile"] == "modern_kb"
+
+
+def test_article_type_detected_from_structure():
+    # убираем front-matter целиком: тип должен определиться по структуре документа
+    text = fixture("troubleshooting_modern_kb").split("---\n", 2)[2].lstrip()
+    detected = describe(text)
+    assert detected["type_id"] == "troubleshooting"
+    assert "эвристика" in detected["type_source"]
+
+
+def test_type_schema_checks_sections_order_and_meta():
+    broken = (
+        "---\ntype_id: troubleshooting\ntemplate_profile: modern_kb\n---\n\n"
+        "# Ошибка\n\n## Решение\n\nТекст.\n\n## Симптомы\n\nТекст.\n"
+    )
+    rules = {(item.rule, item.excerpt) for item in check_text(broken)}
+    assert ("missing-section", "Причина") in rules          # нет обязательного раздела
+    assert any(rule == "section-order" for rule, _ in rules)  # порядок нарушен
+    assert ("missing-meta", "article_id") in rules            # нет метаполя профиля
+    assert ("missing-meta", "kb_id") in rules
+
+
+def test_profile_rules_do_not_leak_between_generations():
+    # У старого профиля метаданные лежат в подвале, и правило footer-meta к нему не применяется
+    legacy_rules = {item.rule for item in check_text(fixture("howto_legacy_help"))}
+    assert "KDOC-FOOTER-META" not in legacy_rules
+
+    modern_without_footer = fixture("howto_modern_help").replace(
+        "*Идентификатор статьи: KB-1001. Дата обновления: 2026-08-19.*", ""
+    ).replace("updated: 2026-08-19\n", "")
+    modern_rules = {item.rule for item in check_text(modern_without_footer)}
+    assert "KDOC-FOOTER-META" in modern_rules
+
+
+def test_kdoc_rules_fire_only_for_their_type():
+    howto = {item.rule for item in check_text(fixture("howto_modern_help"))}
+    assert "KDOC-ESCALATION" not in howto      # правило только для troubleshooting
+
+    без_эскалации = fixture("troubleshooting_modern_kb").replace(
+        "## Эскалация\n\nЕсли решение не помогло, обратитесь в техническую поддержку.\n\n", ""
+    )
+    assert "KDOC-ESCALATION" in {item.rule for item in check_text(без_эскалации)}
+
+
+def test_clean_fixtures_pass_all_checks():
+    for name in ("howto_modern_help", "troubleshooting_modern_kb"):
+        problems = [item for item in check_text(fixture(name)) if item.severity == "error"]
+        assert problems == [], f"{name}: {[item.message for item in problems]}"
+
+
+def test_bad_howto_triggers_expected_kdoc_rules():
+    found = {item.rule for item in check_text(fixture("bad_howto"))}
+    assert "KDOC-LEADIN" in found              # нет лид-ина «Чтобы …:»
+    assert "KDOC-RESULT" in found              # нет абзаца-результата
+    assert "KDOC-UI-BOLD" in found             # UI-метка в кавычках вместо полужирного
+    assert "KDOC-ADMONITION-TYPE" in found     # врезка без машиночитаемого типа
+    assert "KDOC-TABLE-FOR-PARALLEL" in found  # три однотипных пункта
+    assert "KDOC-IMAGE-ALT" in found           # нет alt-текста
+
+
+def test_admonition_type_never_comes_from_colour():
+    coloured = [
+        item for item in check_text(fixture("bad_howto"))
+        if item.rule == "KDOC-ADMONITION-TYPE" and "цвет" in item.message
+    ]
+    assert coloured, "цветовая врезка должна считаться нарушением"
+
+
+def test_disputed_rules_are_recommendations_not_violations():
+    items = {item.rule: item for item in check_text(fixture("bad_howto"))}
+    assert items["KDOC-TABLE-FOR-PARALLEL"].kind == "recommendation"
+    assert items["KDOC-RESULT"].kind == "recommendation"
+    assert items["KDOC-LEADIN"].kind == "violation"
+    assert items["KDOC-UI-BOLD"].kind == "violation"
+
+
+def test_disputed_rule_can_be_raised_to_error(client):
+    config_path = client.tmp_path / "config.yaml"
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    raw["checks"]["kdoc"] = {"KDOC-TABLE-FOR-PARALLEL": "error"}
+    config_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    data = client.post("/api/check", json={"content": fixture("bad_howto")}).json()
+    table = [item for item in data["violations"] if item["rule"] == "KDOC-TABLE-FOR-PARALLEL"]
+    assert table and table[0]["severity"] == "error"
+    assert table[0]["kind"] == "violation"
+
+
+def test_external_api_reference_is_not_linted():
+    found = check_text(fixture("api_reference_external"))
+    assert len(found) == 1
+    assert found[0].rule == "not-lintable"
+    assert found[0].kind == "recommendation"
+    assert "Swagger" in found[0].message or "swagger" in found[0].message.lower()
+
+
+def test_check_endpoint_reports_profile_and_type(client):
+    data = client.post("/api/check", json={"content": fixture("howto_modern_help")}).json()
+    assert data["document"]["profile"] == "modern_help"
+    assert data["document"]["type_id"] == "howto_procedure"
+    assert data["summary"]["violations"] == 0
+    assert "recommendations" in data["summary"]

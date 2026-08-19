@@ -1,0 +1,17 @@
+термин,принятое написание,избегать,перевод,не переводить,локаль,комментарий
+KUMA,KUMA,кума;Kuma,KUMA,да,ru,продуктовое имя
+Kaspersky CompanyAccount,Kaspersky CompanyAccount,Company Account;компани аккаунт,Kaspersky CompanyAccount,да,ru,сервисное имя
+токен доступа,токен доступа,ключ доступа;access-ключ,access token,нет,ru,
+эндпоинт,эндпоинт,эндпойнт;endpoint,endpoint,нет,ru,
+веб-интерфейс,веб-интерфейс,web-интерфейс;вебинтерфейс,web interface,нет,ru,
+коррелятор,коррелятор,correlator,correlator,нет,ru,короткое имя фичи в en-локали может отличаться
+политика,политика,полиси,policy,нет,ru,
+учётная запись,учётная запись,аккаунт;юзер,account,нет,ru,
+API,API,,API,да,ru,общепринятая аббревиатура
+POST,POST,,POST,да,ru,метод HTTP
+GET,GET,,GET,да,ru,метод HTTP
+CSV,CSV,,CSV,да,ru,формат файла
+XLSX,XLSX,,XLSX,да,ru,формат файла
+JSON,JSON,,JSON,да,ru,формат данных
+HTTP,HTTP,,HTTP,да,ru,протокол
+URL,URL,,URL,да,ru,адрес ресурса

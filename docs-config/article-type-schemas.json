@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "note": "ОБРАЗЕЦ ФОРМАТА. Замените файлом из разбора портала.",
+  "profiles": [
+    "legacy_help",
+    "modern_help",
+    "modern_kb"
+  ],
+  "admonition_types": [
+    "note",
+    "warning",
+    "important",
+    "example"
+  ],
+  "types": [
+    {
+      "type_id": "howto_procedure",
+      "name": "Инструкция (how-to)",
+      "profiles": [
+        "legacy_help",
+        "modern_help",
+        "modern_kb"
+      ],
+      "required_sections": [
+        "Назначение",
+        "Порядок действий"
+      ],
+      "enforce_order": true,
+      "section_levels": {
+        "Назначение": 2,
+        "Порядок действий": 2
+      },
+      "required_meta": {
+        "modern_help": [
+          "article_id",
+          "product",
+          "locale"
+        ],
+        "modern_kb": [
+          "article_id",
+          "kb_id"
+        ],
+        "*": [
+          "article_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Порядок действий"
+        ],
+        "title_prefix": [
+          "Как ",
+          "Чтобы "
+        ]
+      },
+      "rules": {
+        "KDOC-LEADIN": "error",
+        "KDOC-RESULT": "warning"
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "concept_overview",
+      "name": "Обзор / концепция",
+      "profiles": [
+        "legacy_help",
+        "modern_help"
+      ],
+      "required_sections": [
+        "Назначение"
+      ],
+      "enforce_order": true,
+      "section_levels": {
+        "Назначение": 2
+      },
+      "required_meta": {
+        "*": [
+          "article_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "О программе",
+          "Обзор"
+        ],
+        "title_prefix": [
+          "О "
+        ]
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "reference_parameters",
+      "name": "Справочник параметров",
+      "profiles": [
+        "modern_help"
+      ],
+      "required_sections": [
+        "Назначение",
+        "Параметры"
+      ],
+      "enforce_order": true,
+      "section_levels": {
+        "Параметры": 2
+      },
+      "required_meta": {
+        "*": [
+          "article_id",
+          "product"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Параметры",
+          "Настройки"
+        ]
+      },
+      "rules": {
+        "KDOC-TABLE-FOR-PARALLEL": "error"
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "troubleshooting",
+      "name": "Устранение неполадок",
+      "profiles": [
+        "modern_help",
+        "modern_kb"
+      ],
+      "required_sections": [
+        "Симптомы",
+        "Причина",
+        "Решение"
+      ],
+      "optional_sections": [
+        "Эскалация"
+      ],
+      "enforce_order": true,
+      "section_levels": {
+        "Симптомы": 2,
+        "Причина": 2,
+        "Решение": 2
+      },
+      "required_meta": {
+        "modern_kb": [
+          "article_id",
+          "kb_id"
+        ],
+        "*": [
+          "article_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Симптомы",
+          "Решение"
+        ],
+        "title_prefix": [
+          "Ошибка",
+          "Не работает"
+        ]
+      },
+      "rules": {
+        "KDOC-ESCALATION": "warning"
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "release_notes",
+      "name": "Что нового",
+      "profiles": [
+        "modern_help",
+        "modern_kb"
+      ],
+      "required_sections": [
+        "Что нового",
+        "Исправленные проблемы"
+      ],
+      "enforce_order": true,
+      "required_meta": {
+        "*": [
+          "article_id",
+          "version"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Что нового"
+        ],
+        "title_prefix": [
+          "Что нового",
+          "Release"
+        ]
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "installation",
+      "name": "Установка и обновление",
+      "profiles": [
+        "legacy_help",
+        "modern_help"
+      ],
+      "required_sections": [
+        "Предварительные условия",
+        "Установка"
+      ],
+      "enforce_order": true,
+      "required_meta": {
+        "*": [
+          "article_id",
+          "product"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Установка"
+        ],
+        "title_prefix": [
+          "Установка",
+          "Обновление"
+        ]
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "faq",
+      "name": "Частые вопросы",
+      "profiles": [
+        "modern_kb"
+      ],
+      "required_sections": [
+        "Вопросы и ответы"
+      ],
+      "required_meta": {
+        "*": [
+          "article_id",
+          "kb_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Вопросы и ответы"
+        ],
+        "title_prefix": [
+          "Часто",
+          "FAQ"
+        ]
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "licensing",
+      "name": "Лицензирование",
+      "profiles": [
+        "legacy_help",
+        "modern_help"
+      ],
+      "required_sections": [
+        "Назначение",
+        "Условия"
+      ],
+      "required_meta": {
+        "*": [
+          "article_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Лицензия",
+          "Условия"
+        ],
+        "title_prefix": [
+          "Лицензирование"
+        ]
+      },
+      "lintable": true
+    },
+    {
+      "type_id": "api_reference_external",
+      "name": "Справочник API (внешний инструмент)",
+      "profiles": [
+        "modern_help"
+      ],
+      "required_meta": {
+        "*": [
+          "article_id"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Справочник API"
+        ],
+        "title_prefix": [
+          "API"
+        ],
+        "text_contains": [
+          "swagger",
+          "openapi"
+        ]
+      },
+      "lintable": false,
+      "note": "Детальный API вынесен в Swagger/OpenAPI: текстовым линтером не проверяется."
+    },
+    {
+      "type_id": "compliance_notice",
+      "name": "Регуляторное уведомление",
+      "profiles": [
+        "modern_help",
+        "modern_kb"
+      ],
+      "required_sections": [
+        "Назначение"
+      ],
+      "required_meta": {
+        "*": [
+          "article_id",
+          "locale"
+        ]
+      },
+      "detect": {
+        "headings_any": [
+          "Требования регулятора"
+        ],
+        "title_prefix": [
+          "Уведомление"
+        ]
+      },
+      "market_specific": true,
+      "note": "Есть не во всех локалях: отсутствие зеркала в другой локали не считается ошибкой.",
+      "lintable": true
+    }
+  ]
+}

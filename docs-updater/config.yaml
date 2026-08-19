@@ -124,6 +124,13 @@ checks:
   builtin_prose: true
   builtin_markdown: true
   schema: true
+  # Артефакты разбора портала: типы статей, KDOC-правила, глоссарий.
+  # По умолчанию берётся docs-config/ в корне репозитория.
+  # docs_config_dir: "../docs-config"
+  # Уровни отдельных KDOC-правил можно поднимать и опускать здесь:
+  # kdoc:
+  #   KDOC-TABLE-FOR-PARALLEL: error
+  #   KDOC-ESCALATION: off
   # Правила формулировки и шаблон статьи (правит редактор)
   prose_rules: "data/style-rules.yaml"
   template_schema: "data/template.schema.yaml"

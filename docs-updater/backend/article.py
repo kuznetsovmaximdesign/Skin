@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import docs_config
 from .checks import schema as schema_rules
 from .ollama_client import OllamaClient
 
@@ -28,8 +29,17 @@ SECTION_SYSTEM = """Ты — технический писатель. Ты пи�
 5. Другие разделы не пиши и не повторяй. Без вступлений и без ``` вокруг ответа."""
 
 
-def template_sections(config: dict[str, Any]) -> list[tuple[str, int]]:
-    """Разделы шаблона продукта и их уровни."""
+def template_sections(config: dict[str, Any], type_id: str = "") -> list[tuple[str, int]]:
+    """Разделы шаблона: сначала схема выбранного типа статьи, иначе общий шаблон продукта."""
+    entry = docs_config.type_by_id(config, type_id) if type_id else None
+    if entry:
+        levels = entry["section_levels"]
+        ordered = list(entry["required_sections"])
+        for title in entry.get("optional_sections", []):
+            if title not in ordered:
+                ordered.append(title)
+        return [(title, int(levels.get(title, 2))) for title in ordered]
+
     settings = config.get("checks", {}) or {}
     template = schema_rules.load_schema(config, settings)
     levels = template.get("section_levels") or {}
@@ -41,13 +51,26 @@ def template_sections(config: dict[str, Any]) -> list[tuple[str, int]]:
     return [(title, int(levels.get(title, 2))) for title in ordered]
 
 
-def front_matter_block(config: dict[str, Any], values: dict[str, str]) -> str:
-    settings = config.get("checks", {}) or {}
-    template = schema_rules.load_schema(config, settings)
-    fields = template.get("front_matter") or []
+def front_matter_block(
+    config: dict[str, Any], values: dict[str, str], type_id: str = "", profile: str = ""
+) -> str:
+    """Блок метаданных: обязательные поля типа статьи для выбранного профиля шаблона."""
+    entry = docs_config.type_by_id(config, type_id) if type_id else None
+    fields: list[str] = []
+    if entry:
+        fields = docs_config.required_meta_for(entry, profile)
     if not fields:
+        settings = config.get("checks", {}) or {}
+        template = schema_rules.load_schema(config, settings)
+        fields = list(template.get("front_matter") or [])
+    if not fields and not type_id:
         return ""
+
     lines = ["---"]
+    if type_id:
+        lines.append(f"type_id: {type_id}")
+        if profile:
+            lines.append(f"template_profile: {profile}")
     for field in fields:
         lines.append(f"{field}: {values.get(field, '[уточнить]')}")
     lines.append("---")
@@ -96,17 +119,19 @@ def draft(
     style_guide: str,
     example: str = "",
     front_matter: dict[str, str] | None = None,
+    type_id: str = "",
+    profile: str = "",
 ) -> dict[str, Any]:
-    """Собирает черновик статьи по разделам шаблона."""
+    """Собирает черновик статьи по разделам шаблона выбранного типа."""
     model = config["ollama"]["generation_model"]
     client.ensure_model(model)
 
-    plan = template_sections(config)
+    plan = template_sections(config, type_id)
     if not plan:
         plan = [("Назначение", 2), ("Ограничения", 2)]
     outline = [name for name, _ in plan]
 
-    parts: list[str] = [front_matter_block(config, front_matter or {}) + f"# {title}\n"]
+    parts: list[str] = [f"# {title}\n"]
     for name, level in plan:
         answer = client.generate(
             model=model,
@@ -122,4 +147,20 @@ def draft(
             body = f"{'#' * level} {name}\n\n{body}"
         parts.append(body)
 
-    return {"text": "\n\n".join(part.strip() for part in parts if part.strip()) + "\n", "sections": outline}
+    body = "\n\n".join(part.strip() for part in parts if part.strip()) + "\n"
+
+    # Если тип не задан явно, определяем его по собранной структуре: от типа и профиля
+    # зависит, какие метаполя обязательны в этой статье.
+    if not type_id:
+        from .checks import describe_document
+
+        described = describe_document(body, config)
+        type_id = described["type_id"]
+        profile = profile or described["profile"]
+
+    return {
+        "text": front_matter_block(config, front_matter or {}, type_id, profile) + body,
+        "sections": outline,
+        "type_id": type_id,
+        "profile": profile,
+    }

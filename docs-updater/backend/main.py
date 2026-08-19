@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import changeset as changeset_module
-from . import article, checks, docmap, drift, impact, indexer, languages, search, sections
+from . import article, checks, docmap, docs_config, drift, impact, indexer, languages
+from . import search, sections
 from . import publish, security, style
 from .checks import prose as prose_rules
 from .verify import check_and_fix
@@ -255,6 +256,9 @@ class DecideRequest(BaseModel):
 class NewArticleRequest(BaseModel):
     title: str = Field(min_length=1)
     requirements: str = Field(min_length=1)
+    # Тип статьи из docs-config и профиль шаблона; по умолчанию — первый тип продукта
+    type_id: str | None = None
+    profile: str | None = None
     file_name: str | None = None
     front_matter: dict[str, str] | None = None
     use_examples: bool = True
@@ -883,6 +887,8 @@ def new_article(payload: NewArticleRequest, request: Request, product: str | Non
                 example = indexer.read_text(source)
 
     free_memory_for(config, client, "generation")
+    known_profiles = docs_config.profiles(config)
+    profile = payload.profile or (known_profiles[0] if known_profiles else "")
     drafted = article.draft(
         config=config,
         client=client,
@@ -891,6 +897,8 @@ def new_article(payload: NewArticleRequest, request: Request, product: str | Non
         style_guide=style_guide,
         example=example,
         front_matter=payload.front_matter,
+        type_id=payload.type_id or "",
+        profile=profile,
     )
     verified = check_and_fix(config, client, drafted["text"], style_guide, "document")
 
@@ -915,6 +923,8 @@ def new_article(payload: NewArticleRequest, request: Request, product: str | Non
 
     return {
         "title": payload.title,
+        "type_id": drafted["type_id"],
+        "profile": drafted["profile"],
         "sections": drafted["sections"],
         "text": verified["text"],
         "result_file": out_path.name,
@@ -1068,13 +1078,21 @@ def drift_endpoint(payload: DriftRequest, product: str | None = None) -> dict[st
 
 @app.post("/api/check")
 def check_endpoint(payload: ReviewRequest, product: str | None = None) -> dict[str, Any]:
-    """Проверка произвольного текста: формулировка, оформление, шаблон."""
+    """Проверка произвольного текста: формулировка, оформление, тип статьи и профиль шаблона."""
     config = load_config_for(product)
     violations = checks.run_checks(payload.content, config)
     return {
+        "document": checks.describe_document(payload.content, config),
         "violations": [item.as_dict() for item in violations],
         "summary": checks.summarize(violations),
     }
+
+
+@app.get("/api/docs-config")
+def docs_config_endpoint(product: str | None = None) -> dict[str, Any]:
+    """Что загружено из docs-config: типы статей, профили, правила KDOC, глоссарий."""
+    config = load_config_for(product)
+    return docs_config.summary(config)
 
 
 @app.post("/api/generate")
