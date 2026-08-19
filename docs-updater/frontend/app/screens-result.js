@@ -6,6 +6,14 @@ const { H, html, C, TAG, STATUS, severityTone, Card, CardHead, Body, Row, Stack,
         Note, Muted, Block, useAsync, useElapsed, readValue, plural, fileName,
         useState, useEffect } = window.UI;
 
+/* Внутренние коды режимов — словами. */
+const MODE_LABEL = {
+  document: 'переписан весь документ',
+  section: 'переписан один раздел',
+  changeset: 'собрано из отдельных правок',
+  'новая статья': 'новая статья по шаблону',
+};
+
 const DIFF_LABEL = { insert: 'добавлено', delete: 'удалено', replace: 'изменено', equal: 'без изменений' };
 const DIFF_TONE = { insert: 'ok', delete: 'bad', replace: 'warn', equal: 'muted' };
 
@@ -189,7 +197,7 @@ function ScreenResult({ app }) {
   if (!result) {
     return html`
       <${Stack} gap=${16}>
-        <${PageTitle} title="Что поменялось" />
+        <${PageTitle} title="Что получилось" />
         <${Card}><${Body}>
           <${Block} state="empty" empty=${{ title: 'Результата пока нет',
             description: 'Сначала переписать текст на шаге «Обновление документа».',
@@ -224,8 +232,8 @@ function ScreenResult({ app }) {
 
   return html`
     <${Stack} gap=${16}>
-      <${PageTitle} title="Что поменялось"
-        subtitle=${`${result.doc_path} · режим: ${result.mode || 'набор правок'}${result.model ? ' · модель: ' + result.model : ''}`} />
+      <${PageTitle} title="Что получилось"
+        subtitle=${`${result.doc_path} · ${MODE_LABEL[result.mode] || result.mode || 'набор правок'}${result.model ? ' · модель ' + result.model : ''}`} />
 
       ${applied && applied.error ? html`<${Block} state="error" error=${applied.error} />` : null}
       ${applied && applied.applied ? html`
