@@ -45,6 +45,25 @@ def search_documents(
         query_vector = client.embed(model, [query])[0]
 
         best: dict[str, dict[str, Any]] = {}
+
+        # Карта «что документирует»: смысловая связь, а не совпадение слов.
+        for doc_path, doc_title, summary, entities, vector in index_store.iter_summaries(connection):
+            if not vector:
+                continue
+            score = cosine(query_vector, vector)
+            current = best.get(doc_path)
+            if current is None or score > current["score"]:
+                best[doc_path] = {
+                    "id": None,
+                    "path": doc_path,
+                    "title": doc_title or doc_path,
+                    "heading": "",
+                    "score": score,
+                    "matched_on": "summary",
+                    "summary": summary,
+                    "entities": entities,
+                }
+
         for section_id, doc_path, doc_title, heading, vector in index_store.iter_embeddings(connection):
             score = cosine(query_vector, vector)
             current = best.get(doc_path)
@@ -55,7 +74,13 @@ def search_documents(
                     "title": doc_title or doc_path,
                     "heading": heading or "",
                     "score": score,
+                    "matched_on": "section",
+                    "summary": (current or {}).get("summary", ""),
+                    "entities": (current or {}).get("entities", ""),
                 }
+            elif current is not None:
+                current.setdefault("summary", "")
+                current.setdefault("entities", "")
 
         ranked = sorted(best.values(), key=lambda item: item["score"], reverse=True)[:top_k]
         return [
@@ -63,7 +88,14 @@ def search_documents(
                 "path": item["path"],
                 "title": item["title"],
                 "heading": item["heading"],
-                "snippet": snippet(index_store.section_text(connection, item["id"])),
+                "snippet": (
+                    snippet(index_store.section_text(connection, item["id"]))
+                    if item.get("id")
+                    else snippet(item.get("summary", ""))
+                ),
+                "summary": item.get("summary", ""),
+                "entities": item.get("entities", ""),
+                "matched_on": item.get("matched_on", "section"),
                 "relevance": to_percent(item["score"]),
                 "score": round(item["score"], 4),
             }

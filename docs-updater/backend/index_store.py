@@ -15,7 +15,8 @@ from typing import Any, Iterator
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS documents (
-    path TEXT PRIMARY KEY, title TEXT, chars INTEGER, sections INTEGER, modified REAL
+    path TEXT PRIMARY KEY, title TEXT, chars INTEGER, sections INTEGER, modified REAL,
+    content_hash TEXT, summary TEXT, entities TEXT, summary_embedding BLOB
 );
 CREATE TABLE IF NOT EXISTS sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +98,8 @@ def prepare_rebuild(connection: sqlite3.Connection) -> None:
             start_line INTEGER, hash TEXT, embedding BLOB
         );
         CREATE TABLE documents_new (
-            path TEXT PRIMARY KEY, title TEXT, chars INTEGER, sections INTEGER, modified REAL
+            path TEXT PRIMARY KEY, title TEXT, chars INTEGER, sections INTEGER, modified REAL,
+            content_hash TEXT, summary TEXT, entities TEXT, summary_embedding BLOB
         );
         """
     )
@@ -105,15 +107,58 @@ def prepare_rebuild(connection: sqlite3.Connection) -> None:
 
 def add_document(connection: sqlite3.Connection, document: dict[str, Any]) -> None:
     connection.execute(
-        "INSERT OR REPLACE INTO documents_new(path, title, chars, sections, modified) VALUES(?,?,?,?,?)",
+        "INSERT OR REPLACE INTO documents_new"
+        "(path, title, chars, sections, modified, content_hash, summary, entities, summary_embedding)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
         (
             document["path"],
             document["title"],
             document["chars"],
             document["sections"],
             document["modified"],
+            document.get("content_hash", ""),
+            document.get("summary", ""),
+            document.get("entities", ""),
+            document.get("summary_embedding"),
         ),
     )
+
+
+def previous_summary(connection: sqlite3.Connection, path: str, content_hash: str) -> dict[str, Any] | None:
+    """Резюме документа из прошлого индекса — если содержимое не менялось, считать заново не нужно."""
+    row = connection.execute(
+        "SELECT summary, entities, summary_embedding FROM documents WHERE path = ? AND content_hash = ?",
+        (path, content_hash),
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    return {"summary": row[0], "entities": row[1] or "", "summary_embedding": row[2]}
+
+
+def documents_without_summary(connection: sqlite3.Connection) -> list[str]:
+    rows = connection.execute(
+        "SELECT path FROM documents WHERE summary IS NULL OR summary = '' ORDER BY path"
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def set_summary(
+    connection: sqlite3.Connection, path: str, summary: str, entities: str, embedding: bytes | None
+) -> None:
+    connection.execute(
+        "UPDATE documents SET summary = ?, entities = ?, summary_embedding = ? WHERE path = ?",
+        (summary, entities, embedding, path),
+    )
+
+
+def iter_summaries(connection: sqlite3.Connection):
+    """Курсор по резюме документов: путь, заголовок, резюме, сущности, вектор."""
+    cursor = connection.execute(
+        "SELECT path, title, summary, entities, summary_embedding FROM documents"
+        " WHERE summary IS NOT NULL AND summary != ''"
+    )
+    for row in cursor:
+        yield row[0], row[1], row[2], row[3], (unpack(row[4]) if row[4] else [])
 
 
 def add_sections(connection: sqlite3.Connection, rows: list[tuple[Any, ...]]) -> None:
@@ -156,10 +201,18 @@ def section_text(connection: sqlite3.Connection, section_id: int) -> str:
 
 def documents(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = connection.execute(
-        "SELECT path, title, chars, sections, modified FROM documents ORDER BY path"
+        "SELECT path, title, chars, sections, modified, summary, entities FROM documents ORDER BY path"
     ).fetchall()
     return [
-        {"path": row[0], "title": row[1], "chars": row[2], "sections": row[3], "modified": row[4]}
+        {
+            "path": row[0],
+            "title": row[1],
+            "chars": row[2],
+            "sections": row[3],
+            "modified": row[4],
+            "summary": row[5] or "",
+            "entities": row[6] or "",
+        }
         for row in rows
     ]
 

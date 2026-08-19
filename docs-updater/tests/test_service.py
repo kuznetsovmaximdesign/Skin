@@ -75,6 +75,8 @@ def client(tmp_path, monkeypatch, fake_ollama):
             "samples_dir": "samples",
             "rules_dir": "rules",
             "derived_guide": "derived-guide.md",
+            "changesets_dir": "changesets",
+            "feedback_log": "feedback.jsonl",
             "use_derived_guide": True,
             "index_file": "index.sqlite3",
             "output_dir": "output",
@@ -1105,3 +1107,239 @@ def test_stream_also_runs_checks(client):
         events = [json_module.loads(line) for line in response.iter_lines() if line.strip()]
     assert any(event["type"] == "checking" for event in events)
     assert "checks" in events[-1]
+
+
+# --- changeset: правки с обоснованием, принимаются поштучно -----------------
+
+
+def propose(client, description="Срок жизни токена увеличен до 120 минут.", **kwargs):
+    body = {"doc_path": "api-auth.md", "change_description": description, **kwargs}
+    return client.post("/api/changeset/propose", json=body).json()
+
+
+def test_changeset_proposes_edits_with_provenance(client):
+    client.ollama.generate_response = (
+        "## Срок жизни токена\n\nТокен действует 120 минут.\n\n"
+        "ОБОСНОВАНИЕ: срок жизни токена увеличен до 120 минут.\nПРЕДПОЛОЖЕНИЕ: нет"
+    )
+    data = propose(client, section_indexes=[4])
+
+    assert data["summary"]["total"] == 1
+    edit = data["edits"][0]
+    assert edit["section"].endswith("Срок жизни токена")
+    assert "120 минут" in edit["new"]
+    assert "ОБОСНОВАНИЕ" not in edit["new"]  # служебные строки убраны из текста
+    assert edit["reason"] == "срок жизни токена увеличен до 120 минут."
+    assert edit["grounded"] is True
+    assert edit["assumption"] is False
+    assert edit["confidence"] in {"высокая", "средняя"}
+    assert edit["status"] == "pending"
+
+
+def test_changeset_marks_unjustified_edit_as_assumption(client):
+    client.ollama.generate_response = (
+        "## Срок жизни токена\n\nТокен действует 120 минут. Добавлена ротация ключей.\n\n"
+        "ОБОСНОВАНИЕ: так будет лучше для безопасности\nПРЕДПОЛОЖЕНИЕ: нет"
+    )
+    data = propose(client, section_indexes=[4])
+    edit = data["edits"][0]
+    assert edit["grounded"] is False        # цитаты нет в описании изменения
+    assert edit["assumption"] is True       # значит это предположение модели
+    assert edit["confidence"] == "низкая"
+    assert data["summary"]["assumptions"] == 1
+
+
+def test_changeset_does_not_touch_the_document(client):
+    client.ollama.generate_response = "## Срок жизни токена\n\nТокен действует 120 минут."
+    propose(client, section_indexes=[4])
+    original = (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+    assert "60 минут" in original
+
+
+def test_changeset_build_uses_only_accepted_edits(client):
+    client.ollama.generate_response = (
+        "## Срок жизни токена\n\nТокен действует 120 минут.\n\n"
+        "ОБОСНОВАНИЕ: срок жизни токена увеличен до 120 минут.\nПРЕДПОЛОЖЕНИЕ: нет"
+    )
+    data = propose(client, section_indexes=[4, 5])
+    assert len(data["edits"]) >= 1
+
+    first, *rest = data["edits"]
+    client.post(
+        f"/api/changeset/{data['id']}/decide", json={"edit_id": first["id"], "accepted": True}
+    )
+    for edit in rest:
+        client.post(
+            f"/api/changeset/{data['id']}/decide",
+            json={"edit_id": edit["id"], "accepted": False, "comment": "не нужно"},
+        )
+
+    built = client.post(f"/api/changeset/{data['id']}/build").json()
+    assert built["applied_edits"] == 1
+    assert "120 минут" in built["updated"]
+    # незатронутые разделы остались дословно теми же
+    original = built["original"]
+    spans_before = outline(original)
+    spans_after = outline(built["updated"])
+    changed_index = first["section_index"]
+    for before, after in zip(spans_before, spans_after):
+        if before.start <= spans_before[changed_index].start and before.end >= spans_before[changed_index].end:
+            continue
+        assert section_text(original, before) == section_text(built["updated"], after)
+    assert (client.tmp_path / "output" / built["result_file"]).exists()
+    assert "60 минут" in (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+
+
+def test_changeset_build_requires_accepted_edits(client):
+    client.ollama.generate_response = "## Срок жизни токена\n\nТокен действует 120 минут."
+    data = propose(client, section_indexes=[4])
+    response = client.post(f"/api/changeset/{data['id']}/build")
+    assert response.status_code == 400
+    assert "Ни одна правка не принята" in response.json()["detail"]
+
+
+def test_rejections_are_logged_and_reused_in_later_prompts(client):
+    client.ollama.generate_response = "## Срок жизни токена\n\nТокен действует 120 минут."
+    data = propose(client, section_indexes=[4])
+    client.post(
+        f"/api/changeset/{data['id']}/decide",
+        json={"edit_id": data["edits"][0]["id"], "accepted": False, "comment": "не пишем цифры в этом разделе"},
+    )
+
+    notes = client.get("/api/feedback", params={"doc_path": "api-auth.md"}).json()["notes"]
+    assert notes and notes[-1]["comment"] == "не пишем цифры в этом разделе"
+
+    propose(client, section_indexes=[4])
+    prompt = last_prompt(client.ollama, "РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ")
+    assert "Прошлые правила-исправления от писателя" in prompt
+    assert "не пишем цифры в этом разделе" in prompt
+
+
+def test_changeset_picks_affected_sections_itself(client):
+    client.ollama.generate_response = "## Срок жизни токена\n\nТокен действует 120 минут."
+    data = propose(client, "срок жизни токена увеличен")
+    assert data["edits"], "должна найтись хотя бы одна затронутая секция"
+    assert all("Авторизация в API" in edit["section"] for edit in data["edits"])
+
+
+def test_unknown_changeset(client):
+    assert client.get("/api/changeset/нет-такого").status_code == 404
+
+
+# --- детект расхождений (docs drift) ---------------------------------------
+
+
+def test_drift_finds_broken_links_and_anchors(client):
+    doc = client.tmp_path / "docs" / "api-auth.md"
+    doc.write_text(
+        doc.read_text(encoding="utf-8")
+        + "\n\nСмотрите [экспорт](export-reports.md), [пропажу](нет-файла.md) и "
+        "[якорь](#нет-такого-раздела), а также [живой якорь](#ограничения).\n",
+        encoding="utf-8",
+    )
+    data = client.post("/api/drift", json={}).json()
+    messages = [item["message"] for item in data["findings"] if item["kind"] == "broken-link"]
+    assert any("нет-файла.md" in message for message in messages)
+    assert any("нет-такого-раздела" in message for message in messages)
+    assert not any("export-reports.md" in message for message in messages)
+    assert not any("ограничения" in message.lower() for message in messages)
+
+
+def test_drift_finds_stale_values(client):
+    data = client.post(
+        "/api/drift", json={"change_description": "Срок жизни токена увеличен до 120 минут."}
+    ).json()
+    stale = [item for item in data["findings"] if item["kind"] == "stale-value"]
+    assert any("60 минут" in item["excerpt"] for item in stale)
+    assert all(item["doc_path"] for item in stale)
+
+
+def test_drift_finds_mentions_of_removed_things(client):
+    data = client.post(
+        "/api/drift", json={"change_description": "Убрали `access_token` из ответа."}
+    ).json()
+    mentions = [item for item in data["findings"] if item["kind"] == "removed-mention"]
+    assert mentions and all("access_token" in item["excerpt"] for item in mentions)
+    assert data["summary"]["removed_terms"] == ["access_token"]
+
+
+def test_drift_finds_leftover_markers_and_glossary_terms(client):
+    doc = client.tmp_path / "docs" / "install-agent.md"
+    doc.write_text(
+        doc.read_text(encoding="utf-8") + "\n\nЗдесь [уточнить] и TODO, а юзер должен войти.\n",
+        encoding="utf-8",
+    )
+    data = client.post("/api/drift", json={}).json()
+    kinds = {item["kind"] for item in data["findings"] if item["doc_path"] == "install-agent.md"}
+    assert "marker" in kinds
+    assert "glossary" in kinds
+
+
+def test_drift_can_be_limited_to_one_document(client):
+    data = client.post("/api/drift", json={"doc_path": "api-auth.md"}).json()
+    assert all(item["doc_path"] == "api-auth.md" for item in data["findings"])
+
+
+def test_drift_on_clean_docs_is_quiet(client):
+    data = client.post("/api/drift", json={}).json()
+    assert data["summary"]["errors"] == 0
+
+
+# --- карта «что документирует» ---------------------------------------------
+
+
+def test_document_map_is_built_once_and_used_in_search(client):
+    client.post("/api/reindex")
+    assert client.get("/api/map").json()["with_summary"] == 0
+
+    built = client.post("/api/map/build").json()
+    assert built["built"] == 3
+    documents = client.get("/api/map").json()["documents"]
+    assert all(item["summary"] for item in documents)
+    assert any("Авторизация в API" in item["entities"] for item in documents)
+
+    # повторный вызов ничего не пересчитывает
+    assert client.post("/api/map/build").json()["built"] == 0
+
+    candidates = client.post("/api/search", json={"query": "как получить токен доступа"}).json()["candidates"]
+    assert candidates[0]["summary"]
+    assert candidates[0]["matched_on"] in {"summary", "section"}
+
+
+def test_summaries_survive_reindex_when_document_is_unchanged(client):
+    client.post("/api/reindex")
+    client.post("/api/map/build")
+    calls_before = len(client.ollama.requests)
+
+    client.post("/api/reindex")
+    assert client.get("/api/map").json()["with_summary"] == 3
+    assert client.post("/api/map/build").json()["built"] == 0
+
+    # менявшийся документ получает новое резюме
+    doc = client.tmp_path / "docs" / "api-auth.md"
+    doc.write_text(doc.read_text(encoding="utf-8") + "\n\nНовый абзац.\n", encoding="utf-8")
+    client.post("/api/reindex")
+    assert client.get("/api/map").json()["with_summary"] == 2
+    assert client.post("/api/map/build").json()["built"] == 1
+    assert len(client.ollama.requests) > calls_before
+
+
+def test_map_requires_index(client):
+    response = client.post("/api/map/build")
+    assert response.status_code == 400
+    assert "Индекс пуст" in response.json()["detail"]
+
+
+def test_golden_cases_pass(tmp_path):
+    """Регресс-проверка: golden-прогон должен проходить целиком."""
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-m", "tests.golden_run"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "провалено: 0" in result.stdout

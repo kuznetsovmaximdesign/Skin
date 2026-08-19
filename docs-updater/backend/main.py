@@ -17,7 +17,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import checks, generator, indexer, search, sections, style
+from . import changeset as changeset_module
+from . import checks, docmap, drift, indexer, search, sections, style
+from .checks import prose as prose_rules
+from .verify import check_and_fix
 from .config import PROJECT_ROOT, load_config, resolve_path, save_config, style_guide_paths
 from .diffing import build_diff, unified_diff
 from .generator import check_result, generate_update, prepare_generation, review_document
@@ -185,6 +188,23 @@ class GenerateRequest(BaseModel):
     change_description: str = Field(min_length=1)
     # Номер раздела из /api/outline. None — правим документ целиком.
     section_index: int | None = None
+
+
+class ProposeRequest(BaseModel):
+    doc_path: str
+    change_description: str = Field(min_length=1)
+    section_indexes: list[int] | None = None
+
+
+class DecideRequest(BaseModel):
+    edit_id: str
+    accepted: bool
+    comment: str = ""
+
+
+class DriftRequest(BaseModel):
+    change_description: str = ""
+    doc_path: str = ""
 
 
 class ReviewRequest(BaseModel):
@@ -461,6 +481,29 @@ def reindex() -> dict[str, Any]:
     return indexer.build_index(config, client)
 
 
+@app.get("/api/map")
+def document_map() -> dict[str, Any]:
+    """Карта «документ ↔ что он документирует»."""
+    config = load_config()
+    documents = docmap.read_map(config)
+    return {
+        "documents": documents,
+        "with_summary": sum(1 for item in documents if item["summary"]),
+        "total": len(documents),
+    }
+
+
+@app.post("/api/map/build")
+def build_document_map(force: bool = False) -> dict[str, Any]:
+    """Считает недостающие резюме документов. Модели работают по очереди."""
+    config = load_config()
+    if not indexer.index_exists(config):
+        raise HTTPException(status_code=400, detail="Индекс пуст. Сначала нажмите «Переиндексировать».")
+    client = get_client(config)
+    free_memory_for(config, client, "generation")
+    return docmap.build_map(config, client, force=force)
+
+
 @app.get("/api/documents")
 def documents() -> dict[str, Any]:
     config = load_config()
@@ -589,44 +632,120 @@ def store_result(
     return out_path
 
 
-def check_and_fix(
-    config: dict[str, Any],
-    client: OllamaClient,
-    text: str,
-    style_guide: str,
-    scope: str,
-) -> dict[str, Any]:
-    """Проверяет текст и просит модель починить нарушения. Не больше нескольких заходов.
+# --- changeset: правки принимаются поштучно --------------------------------
 
-    Всё, что осталось после починки, возвращается писателю как предупреждения —
-    ничего не прячем.
-    """
-    settings = checks.checks_config(config)
-    violations = checks.run_checks(text, config, scope=scope)
-    iterations = 0
-    max_iterations = int(settings.get("max_fix_iterations", 2)) if settings.get("enabled", True) else 0
 
-    while violations and iterations < max_iterations:
-        errors = [item for item in violations if item.severity == "error"]
-        target = errors or violations
-        repaired = generator.fix_violations(
-            config, client, text, checks.as_instruction(target), style_guide
-        )
-        iterations += 1
-        if not repaired.strip():
-            break
-        candidate = checks.run_checks(repaired, config, scope=scope)
-        # Принимаем починку, только если нарушений стало меньше.
-        if len(candidate) >= len(violations):
-            break
-        text, violations = repaired, candidate
+@app.post("/api/changeset/propose")
+def propose_changeset(payload: ProposeRequest) -> dict[str, Any]:
+    """Предлагает правки по разделам с обоснованием. Документ не меняется."""
+    config = load_config()
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+    source = safe_join(docs_dir, payload.doc_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail=f"Документ не найден: {payload.doc_path}")
 
+    client = get_client(config)
+    free_memory_for(config, client, "generation")
+    result = changeset_module.propose(
+        config=config,
+        client=client,
+        doc_path=payload.doc_path,
+        original=indexer.read_text(source),
+        description=payload.change_description,
+        style_guide=read_style_guide(config),
+        section_indexes=payload.section_indexes,
+        feedback=changeset_module.feedback_instruction(config, payload.doc_path),
+    )
+    return {**result, "summary": changeset_module.summarize(result)}
+
+
+@app.get("/api/changeset/{changeset_id}")
+def get_changeset(changeset_id: str) -> dict[str, Any]:
+    config = load_config()
+    result = changeset_module.load(config, changeset_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Набор правок не найден.")
+    return {**result, "summary": changeset_module.summarize(result)}
+
+
+@app.post("/api/changeset/{changeset_id}/decide")
+def decide_changeset(changeset_id: str, payload: DecideRequest) -> dict[str, Any]:
+    """Писатель принимает или отклоняет отдельную правку; отклонения запоминаются."""
+    config = load_config()
+    result = changeset_module.load(config, changeset_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Набор правок не найден.")
+    if not any(edit["id"] == payload.edit_id for edit in result["edits"]):
+        raise HTTPException(status_code=404, detail="Такой правки нет в наборе.")
+    result = changeset_module.decide(config, result, payload.edit_id, payload.accepted, payload.comment)
+    return {**result, "summary": changeset_module.summarize(result)}
+
+
+@app.post("/api/changeset/{changeset_id}/build")
+def build_changeset(changeset_id: str) -> dict[str, Any]:
+    """Собирает документ из принятых правок и сохраняет отдельным файлом."""
+    config = load_config()
+    result = changeset_module.load(config, changeset_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Набор правок не найден.")
+
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+    source = safe_join(docs_dir, result["doc_path"])
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Исходный документ не найден.")
+
+    original = indexer.read_text(source)
+    accepted = [edit for edit in result["edits"] if edit["status"] == "accepted"]
+    if not accepted:
+        raise HTTPException(status_code=400, detail="Ни одна правка не принята — собирать нечего.")
+
+    updated = changeset_module.build_document(original, result)
+    request = GenerateRequest(doc_path=result["doc_path"], change_description=result["description"])
+    out_path = store_result(
+        config,
+        request,
+        updated,
+        "changeset",
+        ", ".join(edit["section"] for edit in accepted),
+        result.get("model", ""),
+        True,
+    )
     return {
-        "text": text,
-        "violations": [item.as_dict() for item in violations],
-        "summary": checks.summarize(violations),
-        "iterations": iterations,
+        "changeset_id": changeset_id,
+        "doc_path": result["doc_path"],
+        "result_file": out_path.name,
+        "result_path": str(out_path),
+        "applied_edits": len(accepted),
+        "original": original,
+        "updated": updated,
+        "diff": build_diff(original, updated),
     }
+
+
+@app.get("/api/feedback")
+def feedback(doc_path: str = "") -> dict[str, Any]:
+    """Локальный лог: что писатель отклонял раньше."""
+    config = load_config()
+    return {"notes": changeset_module.feedback_notes(config, doc_path)}
+
+
+@app.post("/api/drift")
+def drift_endpoint(payload: DriftRequest) -> dict[str, Any]:
+    """«На что ещё посмотреть»: битые ссылки, устаревшие значения, следы удалённого, пометки."""
+    config = load_config()
+    docs_dir = resolve_path(config["paths"]["docs_dir"])
+    if not docs_dir.exists():
+        raise HTTPException(status_code=400, detail=f"Папка документации не найдена: {docs_dir}")
+
+    settings = checks.checks_config(config)
+    rules = prose_rules.load_rules(config, settings)
+    glossary = {**(rules.get("glossary") or {}), **(rules.get("substitutions") or {})}
+    return drift.scan(
+        docs_dir,
+        description=payload.change_description,
+        only_doc=payload.doc_path,
+        glossary=glossary,
+    )
 
 
 @app.post("/api/check")

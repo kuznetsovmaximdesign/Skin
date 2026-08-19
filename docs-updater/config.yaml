@@ -34,6 +34,9 @@ paths:
   index_file: "data/index.sqlite3"
   # Куда складывать обновлённые документы (оригиналы не перезаписываются)
   output_dir: "data/output"
+  # Наборы предложенных правок (changeset) и локальный лог отклонений писателя
+  changesets_dir: "data/changesets"
+  feedback_log: "data/feedback.jsonl"
 
 search:
   # Сколько кандидатов показывать писателю

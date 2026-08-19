@@ -1,0 +1,46 @@
+# Golden-кейсы: (документ + описание изменения) → что должно получиться.
+# Прогон: python -m tests.golden_run  (локальная заглушка Ollama, без сети и без моделей)
+#         python -m tests.golden_run --live  (настоящий Ollama из config.yaml)
+#
+# Блок stub описывает, что «модель» делает с присланным разделом в офлайн-прогоне.
+# В режиме --live он не используется: правку пишет настоящая модель.
+
+- name: "срок жизни токена"
+  doc: api-auth.md
+  change: "Срок жизни токена увеличен до 120 минут."
+  expect:
+    sections_touched: ["Авторизация в API > Срок жизни токена"]
+    must_contain: ["120 минут"]
+    must_not_contain: ["60 минут"]
+    checks_clean: true
+    links_valid: true
+    untouched_sections_identical: true
+  stub:
+    replace:
+      "60 минут": "120 минут"
+
+- name: "новый формат экспорта"
+  doc: export-reports.md
+  change: "Добавлен экспорт в формате JSON."
+  expect:
+    sections_touched: ["Экспорт отчётов > Форматы выгрузки"]
+    must_contain: ["JSON"]
+    checks_clean: true
+    links_valid: true
+    untouched_sections_identical: true
+  stub:
+    append: "- JSON — для обмена с внешними системами."
+
+- name: "порт агента"
+  doc: install-agent.md
+  change: "Агент теперь использует порт 9443 вместо 8443."
+  expect:
+    sections_touched: ["Установка агента сбора данных > Предварительные условия"]
+    must_contain: ["9443"]
+    must_not_contain: ["8443"]
+    checks_clean: true
+    links_valid: true
+    untouched_sections_identical: true
+  stub:
+    replace:
+      "8443": "9443"

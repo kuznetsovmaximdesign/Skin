@@ -29,6 +29,8 @@ class FakeOllama:
         self.models = models if models is not None else ["qwen3:latest", "bge-m3:latest"]
         self.generate_response: str | None = None
         self.fix_response: str | None = None
+        # Необязательное преобразование присланного текста: (prompt, text) -> text.
+        self.transform = None
         # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
         self.chunk_delay = 0.0
         self.review_response = (
@@ -127,6 +129,10 @@ class FakeOllama:
             # По умолчанию «модель» ничего не чинит и возвращает текст как есть.
             match = re.search(r"# ТЕКСТ\n\n(.*?)\n\n# НАРУШЕНИЯ", prompt, re.DOTALL)
             return match.group(1) if match else ""
+        if "Напиши, что документирует этот документ" in prompt:
+            title = re.search(r"# ДОКУМЕНТ: (.+)", prompt)
+            name = title.group(1).strip() if title else "документ"
+            return f"ОПИСАНИЕ: Документ описывает {name.lower()} и порядок работы с ним.\nСУЩНОСТИ: {name}, токен, лимиты"
         if "ПРОВЕРКА ПО ГАЙДУ" in prompt:
             return self.review_response
         if self.generate_response is not None:
@@ -137,5 +143,7 @@ class FakeOllama:
             re.DOTALL,
         )
         source = match.group(1) if match else "# Пустой документ"
+        if self.transform is not None:
+            return self.transform(prompt, source)
         updated = source.replace("Токен действует 60 минут.", "Токен действует 120 минут.")
         return f"<think>рассуждения модели</think>\n{updated}\n"

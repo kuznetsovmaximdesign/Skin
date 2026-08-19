@@ -36,6 +36,8 @@ DEFAULTS: dict[str, Any] = {
         "use_derived_guide": True,
         "index_file": "data/index.sqlite3",
         "output_dir": "data/output",
+        "changesets_dir": "data/changesets",
+        "feedback_log": "data/feedback.jsonl",
     },
     "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
     "generation": {"temperature": 0.2, "num_ctx": 8192},

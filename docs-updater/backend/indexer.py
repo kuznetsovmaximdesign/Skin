@@ -180,16 +180,20 @@ def build_index(config: dict[str, Any], client: OllamaClient) -> dict[str, Any]:
                     )
                 index_store.add_sections(connection, rows)
 
-            index_store.add_document(
-                connection,
-                {
-                    "path": rel,
-                    "title": title,
-                    "chars": len(content),
-                    "sections": len(file_sections),
-                    "modified": path.stat().st_mtime,
-                },
-            )
+            content_hash = section_hash(content)
+            document = {
+                "path": rel,
+                "title": title,
+                "chars": len(content),
+                "sections": len(file_sections),
+                "modified": path.stat().st_mtime,
+                "content_hash": content_hash,
+            }
+            # Резюме «что документирует» пересчитывается только при изменении документа.
+            carried = index_store.previous_summary(connection, rel, content_hash) if can_reuse else None
+            if carried:
+                document.update(carried)
+            index_store.add_document(connection, document)
             del content, file_sections
 
         index_store.finish_rebuild(connection)

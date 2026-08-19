@@ -7,3 +7,8 @@ data/index.json
 data/output/*
 !data/output/.gitkeep
 data/docs/*.bak-*
+data/changesets/
+data/feedback.jsonl
+data/derived-guide.*
+data/samples/
+data/rules/
