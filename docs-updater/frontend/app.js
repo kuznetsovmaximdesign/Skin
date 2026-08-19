@@ -441,6 +441,28 @@ function renderPreview(diff) {
   $('preview-view').innerHTML = html || '<p class="muted">Документ пуст.</p>';
 }
 
+function renderChecks(checks) {
+  const box = $('checks-notes');
+  if (!checks) { box.hidden = true; return; }
+  const violations = checks.violations || [];
+  const summary = checks.summary || {};
+  box.hidden = false;
+  if (!violations.length) {
+    box.innerHTML = '<div class="review__ok">Автопроверка оформления и формулировок: нарушений нет.</div>';
+    return;
+  }
+  const fixed = checks.fix_iterations
+    ? ` Модель уже исправила часть нарушений (заходов: ${checks.fix_iterations}).`
+    : '';
+  box.innerHTML = `<div class="review__title">Автопроверка: ${summary.errors || 0} ошибок,
+      ${summary.warnings || 0} предупреждений.${fixed}</div>
+    <ul class="review__list">${violations.slice(0, 30).map((item) => `
+      <li${item.severity === 'error' ? ' class="review__err"' : ''}>
+        <span class="review__tag">${escapeHtml(item.source)}/${escapeHtml(item.rule)}</span>
+        ${item.line ? `строка ${item.line}: ` : ''}${escapeHtml(item.message)}
+      </li>`).join('')}</ul>`;
+}
+
 function renderWarnings(warnings) {
   $('warnings').innerHTML = (warnings || [])
     .map((text) => `<div class="warning">${escapeHtml(text)}</div>`).join('');
@@ -530,6 +552,7 @@ function finishResult(data) {
   renderWarnings((data.warnings || []).concat(data.style_guide_used ? [] : ['Гайд по стилю пуст — правки сделаны без него.']));
   renderDiff(data.diff);
   renderPreview(data.diff);
+  renderChecks(data.checks);
   $('result-view').value = data.updated;
   countMarks(data.updated);
   $('result-file').textContent = data.result_path;
@@ -560,6 +583,7 @@ async function generateStreaming(body) {
       renderWarnings(event.warnings || []);
       setResultButtons(false);
       $('review-notes').hidden = true;
+      $('checks-notes').hidden = true;
       showTab('result');
       $('step-diff').scrollIntoView({ behavior: 'smooth' });
       idle();

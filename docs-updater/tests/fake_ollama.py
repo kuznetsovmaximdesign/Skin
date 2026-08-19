@@ -28,6 +28,7 @@ class FakeOllama:
     def __init__(self, models: list[str] | None = None) -> None:
         self.models = models if models is not None else ["qwen3:latest", "bge-m3:latest"]
         self.generate_response: str | None = None
+        self.fix_response: str | None = None
         # Пауза между кусочками потока: позволяет тестам увидеть постепенный вывод.
         self.chunk_delay = 0.0
         self.review_response = (
@@ -120,6 +121,12 @@ class FakeOllama:
 
     def render(self, prompt: str) -> str:
         """По умолчанию возвращает присланный текст (документ или раздел) с одной правкой."""
+        if "НАРУШЕНИЯ, НАЙДЕННЫЕ ПРОВЕРКОЙ" in prompt:
+            if self.fix_response is not None:
+                return self.fix_response
+            # По умолчанию «модель» ничего не чинит и возвращает текст как есть.
+            match = re.search(r"# ТЕКСТ\n\n(.*?)\n\n# НАРУШЕНИЯ", prompt, re.DOTALL)
+            return match.group(1) if match else ""
         if "ПРОВЕРКА ПО ГАЙДУ" in prompt:
             return self.review_response
         if self.generate_response is not None:

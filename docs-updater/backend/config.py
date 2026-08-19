@@ -39,6 +39,23 @@ DEFAULTS: dict[str, Any] = {
     },
     "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
     "generation": {"temperature": 0.2, "num_ctx": 8192},
+    "checks": {
+        "enabled": True,
+        "builtin_prose": True,
+        "builtin_markdown": True,
+        "schema": True,
+        "prose_rules": "data/style-rules.yaml",
+        "template_schema": "data/template.schema.yaml",
+        "max_line_length": 120,
+        "bullet_marker": "-",
+        "require_fence_language": True,
+        "use_vale": True,
+        "vale_binary": "vale",
+        "vale_config": ".vale.ini",
+        "use_markdownlint": True,
+        "markdownlint_command": "markdownlint-cli2",
+        "max_fix_iterations": 2,
+    },
 }
 
 

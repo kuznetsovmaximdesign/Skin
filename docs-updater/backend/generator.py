@@ -59,6 +59,51 @@ def build_prompt(document: str, change_description: str, style_guide: str, doc_p
 Верни полный обновлённый Markdown-документ и ничего кроме него."""
 
 
+FIX_SYSTEM = """Ты — технический редактор. Тебе дают текст и список нарушений правил оформления, найденных автоматической проверкой.
+
+Железные правила:
+1. Исправь перечисленные нарушения и больше ничего не меняй. Смысл текста должен остаться прежним.
+2. Не выдумывай фактов. Если нарушение нельзя исправить без новых данных — оставь как есть и пометь [уточнить].
+3. Сохраняй структуру: заголовки, их уровни и порядок, списки, таблицы, блоки кода.
+4. Верни только исправленный текст целиком. Без комментариев и без ``` вокруг ответа."""
+
+
+def build_fix_prompt(text: str, violations: str, style_guide: str) -> str:
+    guide = (style_guide or "").strip()
+    if len(guide) > MAX_GUIDE_CHARS:
+        guide = guide[:MAX_GUIDE_CHARS] + "\n\n[гайд обрезан по длине]"
+    guide_block = f"# ПРАВИЛА ОФОРМЛЕНИЯ\n\n{guide}\n\n" if guide else ""
+    return f"""{guide_block}# ТЕКСТ
+
+{text}
+
+# НАРУШЕНИЯ, НАЙДЕННЫЕ ПРОВЕРКОЙ
+
+{violations}
+
+# ЗАДАНИЕ
+
+Исправь перечисленные нарушения и верни исправленный текст целиком."""
+
+
+def fix_violations(
+    config: dict[str, Any],
+    client: OllamaClient,
+    text: str,
+    violations: str,
+    style_guide: str,
+) -> str:
+    """Один проход починки: модель получает конкретный список нарушений."""
+    model = config["ollama"]["generation_model"]
+    return client.generate(
+        model=model,
+        prompt=build_fix_prompt(text, violations, style_guide),
+        system=FIX_SYSTEM,
+        temperature=float(config["generation"]["temperature"]),
+        num_ctx=int(config["generation"]["num_ctx"]),
+    )
+
+
 REVIEW_SYSTEM = """Ты — редактор, который проверяет документ на соответствие гайду по стилю.
 
 Правила ответа:

@@ -240,6 +240,10 @@ def test_full_flow_in_browser(live_server):
         assert page.eval_on_selector_all(".preview__removed", "els => els.length") > 0
         page.uncheck("#show-removed")
 
+        # автопроверка оформления показана вместе с результатом
+        assert not page.is_hidden("#checks-notes")
+        assert "Автопроверка" in page.inner_text("#checks-notes")
+
         # проверка готового текста по гайду
         page.click("#review")
         page.wait_for_selector("#review-notes:not([hidden])", timeout=60000)

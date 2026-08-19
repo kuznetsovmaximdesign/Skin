@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import indexer, search, sections, style
+from . import checks, generator, indexer, search, sections, style
 from .config import PROJECT_ROOT, load_config, resolve_path, save_config, style_guide_paths
 from .diffing import build_diff, unified_diff
 from .generator import check_result, generate_update, prepare_generation, review_document
@@ -589,6 +589,57 @@ def store_result(
     return out_path
 
 
+def check_and_fix(
+    config: dict[str, Any],
+    client: OllamaClient,
+    text: str,
+    style_guide: str,
+    scope: str,
+) -> dict[str, Any]:
+    """Проверяет текст и просит модель починить нарушения. Не больше нескольких заходов.
+
+    Всё, что осталось после починки, возвращается писателю как предупреждения —
+    ничего не прячем.
+    """
+    settings = checks.checks_config(config)
+    violations = checks.run_checks(text, config, scope=scope)
+    iterations = 0
+    max_iterations = int(settings.get("max_fix_iterations", 2)) if settings.get("enabled", True) else 0
+
+    while violations and iterations < max_iterations:
+        errors = [item for item in violations if item.severity == "error"]
+        target = errors or violations
+        repaired = generator.fix_violations(
+            config, client, text, checks.as_instruction(target), style_guide
+        )
+        iterations += 1
+        if not repaired.strip():
+            break
+        candidate = checks.run_checks(repaired, config, scope=scope)
+        # Принимаем починку, только если нарушений стало меньше.
+        if len(candidate) >= len(violations):
+            break
+        text, violations = repaired, candidate
+
+    return {
+        "text": text,
+        "violations": [item.as_dict() for item in violations],
+        "summary": checks.summarize(violations),
+        "iterations": iterations,
+    }
+
+
+@app.post("/api/check")
+def check_endpoint(payload: ReviewRequest) -> dict[str, Any]:
+    """Проверка произвольного текста: формулировка, оформление, шаблон."""
+    config = load_config()
+    violations = checks.run_checks(payload.content, config)
+    return {
+        "violations": [item.as_dict() for item in violations],
+        "summary": checks.summarize(violations),
+    }
+
+
 @app.post("/api/generate")
 def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
     config = load_config()
@@ -607,11 +658,16 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
         doc_path=payload.doc_path,
         section=section_payload,
     )
-    updated = result["content"]
-    if not updated.strip():
+    produced = result["content"]
+    if not produced.strip():
         raise HTTPException(status_code=502, detail="Модель вернула пустой ответ. Повторите запрос.")
-    if span is not None:
-        updated = sections.replace_section(original, span, updated)
+
+    # Единый цикл: сгенерировали → проверили → починили.
+    verified = check_and_fix(
+        config, client, produced, style_guide, "section" if span is not None else "document"
+    )
+    produced = verified["text"]
+    updated = sections.replace_section(original, span, produced) if span is not None else produced
 
     # Результат — всегда отдельный файл, оригинал не трогаем.
     out_path = store_result(
@@ -636,6 +692,11 @@ def generate_endpoint(payload: GenerateRequest) -> dict[str, Any]:
         "original": original,
         "updated": updated,
         "warnings": result["warnings"],
+        "checks": {
+            "violations": verified["violations"],
+            "summary": verified["summary"],
+            "fix_iterations": verified["iterations"],
+        },
         "diff": build_diff(original, updated),
         "unified": unified_diff(original, updated, f"a/{payload.doc_path}", f"b/{out_name}"),
     }
@@ -683,6 +744,14 @@ def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
             return
 
         produced = clean_model_output("".join(pieces))
+        if produced.strip():
+            yield event("checking")
+            verified = check_and_fix(
+                config, client, produced, style_guide, "section" if span is not None else "document"
+            )
+            produced = verified["text"]
+        else:
+            verified = {"violations": [], "summary": {}, "iterations": 0}
         if not produced.strip():
             yield event(
                 "error",
@@ -713,6 +782,11 @@ def generate_stream_endpoint(payload: GenerateRequest) -> StreamingResponse:
             original=original,
             updated=updated,
             warnings=plan["warnings"] + check_result(plan["original"], produced),
+            checks={
+                "violations": verified["violations"],
+                "summary": verified["summary"],
+                "fix_iterations": verified["iterations"],
+            },
             diff=build_diff(original, updated),
         )
 

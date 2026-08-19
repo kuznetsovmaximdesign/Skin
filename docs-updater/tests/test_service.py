@@ -25,6 +25,15 @@ from tests.fake_ollama import FakeOllama  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def last_prompt(ollama, marker: str) -> str:
+    """Последний промпт, содержащий маркер: после генерации бывает ещё запрос на починку."""
+    for request in reversed(ollama.requests):
+        prompt = request["payload"].get("prompt", "")
+        if marker in prompt:
+            return prompt
+    raise AssertionError(f"нет запроса с маркером {marker}")
+
+
 def indexed_sections(client, doc_path: str) -> list[str]:
     """Тексты секций документа прямо из локального индекса (SQLite)."""
     with index_store.connect(client.tmp_path / "index.sqlite3") as connection:
@@ -46,6 +55,9 @@ def client(tmp_path, monkeypatch, fake_ollama):
     """Изолированная копия проекта в tmp: свои config.yaml, docs, styleguide."""
     shutil.copytree(REPO_ROOT / "data" / "docs", tmp_path / "docs")
     shutil.copy(REPO_ROOT / "data" / "styleguide.md", tmp_path / "styleguide.md")
+    # Правила формулировки и шаблон статьи — как в настоящей установке
+    shutil.copy(REPO_ROOT / "data" / "style-rules.yaml", tmp_path / "style-rules.yaml")
+    shutil.copy(REPO_ROOT / "data" / "template.schema.yaml", tmp_path / "template.schema.yaml")
 
     config = {
         "ollama": {
@@ -69,6 +81,21 @@ def client(tmp_path, monkeypatch, fake_ollama):
         },
         "search": {"top_k": 5, "chunk_max_chars": 1800, "embed_batch": 8},
         "generation": {"temperature": 0.2, "num_ctx": 8192},
+        "checks": {
+            "enabled": True,
+            "builtin_prose": True,
+            "builtin_markdown": True,
+            "schema": True,
+            "prose_rules": "style-rules.yaml",
+            "template_schema": "template.schema.yaml",
+            "max_line_length": 120,
+            "bullet_marker": "-",
+            "require_fence_language": True,
+            # внешние линтеры в тестах не используем: проверяем встроенные правила
+            "use_vale": False,
+            "use_markdownlint": False,
+            "max_fix_iterations": 2,
+        },
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True), encoding="utf-8")
 
@@ -237,7 +264,7 @@ def test_generate_strips_thinking_and_fences(client):
 
 def test_generate_prompt_contains_guide_and_change(client):
     client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "новая правка"})
-    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    prompt = last_prompt(client.ollama, "ИСХОДНЫЙ ДОКУМЕНТ")
     assert "ГАЙД ПО СТИЛЮ" in prompt
     assert "Гайд по стилю технической документации" in prompt
     assert "новая правка" in prompt
@@ -543,8 +570,7 @@ def test_generate_updates_only_the_chosen_section(client):
     assert compared == 4  # четыре нетронутых раздела рядом
 
     # в модель уходил только раздел, а не весь документ
-    prompt = client.ollama.requests[-1]["payload"]["prompt"]
-    assert "РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ" in prompt
+    prompt = last_prompt(client.ollama, "РАЗДЕЛ, КОТОРЫЙ НУЖНО ОБНОВИТЬ")
     assert "Предварительные условия\n\n- Учётная запись" not in prompt
 
 
@@ -922,7 +948,7 @@ def test_learning_format_persists_and_is_used_afterwards(client):
 
     # формат запомнен: он подмешивается в каждую следующую генерацию сам
     client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
-    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    prompt = last_prompt(client.ollama, "ИСХОДНЫЙ ДОКУМЕНТ")
     assert "Формат, изученный по образцам" in prompt
     assert "Обращение к читателю — на «вы»" in prompt
     assert "Обязательные правила оформления" in prompt  # явный гайд по-прежнему первым
@@ -934,7 +960,7 @@ def test_learned_format_can_be_switched_off_and_forgotten(client):
 
     client.post("/api/format/use", json={"enabled": False})
     client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
-    assert "Формат, изученный по образцам" not in client.ollama.requests[-1]["payload"]["prompt"]
+    assert "Формат, изученный по образцам" not in last_prompt(client.ollama, "ИСХОДНЫЙ ДОКУМЕНТ")
 
     client.post("/api/format/use", json={"enabled": True})
     sources = client.request("DELETE", "/api/format").json()
@@ -965,10 +991,117 @@ def test_several_rule_files_are_all_applied(client):
     assert [guide["file"] for guide in response.json()["guides"]] == ["styleguide.md", "brand.md"]
 
     client.post("/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"})
-    prompt = client.ollama.requests[-1]["payload"]["prompt"]
+    prompt = last_prompt(client.ollama, "ИСХОДНЫЙ ДОКУМЕНТ")
     assert "файл styleguide.md" in prompt
     assert "файл brand.md" in prompt
     assert "Название продукта не склоняем" in prompt
 
     client.request("DELETE", "/api/style-guides", params={"file": "brand.md"})
     assert [guide["file"] for guide in client.get("/api/style-sources").json()["guides"]] == ["styleguide.md"]
+
+
+# --- проверка соответствия: формулировка, оформление, шаблон ---------------
+
+
+BAD_DOC = """## Сначала подраздел
+
+Юзер должен залогиниться. Материал описывает вход.
+
+* пункт не тем маркером
+"""
+
+
+def test_check_endpoint_finds_prose_markup_and_schema_problems(client):
+    data = client.post("/api/check", json={"content": BAD_DOC}).json()
+    rules = {(item["source"], item["rule"]) for item in data["violations"]}
+    assert ("prose", "substitution") in rules            # юзер → пользователь
+    assert ("markdown", "first-heading-h1") in rules     # начали с подраздела
+    assert ("markdown", "bullet-marker") in rules        # список звёздочкой
+    assert ("schema", "missing-section") in rules        # нет обязательных разделов
+    assert data["summary"]["errors"] >= 3
+    assert data["summary"]["by_source"]["prose"] >= 2
+
+
+def test_clean_document_passes_checks(client):
+    clean = (client.tmp_path / "docs" / "api-auth.md").read_text(encoding="utf-8")
+    data = client.post("/api/check", json={"content": clean}).json()
+    errors = [item for item in data["violations"] if item["severity"] == "error"]
+    assert errors == [], errors
+
+
+def test_generation_reports_checks(client):
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+    assert "checks" in data
+    assert set(data["checks"]) == {"violations", "summary", "fix_iterations"}
+
+
+def test_generation_fixes_violations_and_keeps_the_better_version(client):
+    # модель выдала текст с нарушениями…
+    client.ollama.generate_response = BAD_DOC
+    # …а на запрос починки вернула чистый вариант
+    client.ollama.fix_response = (
+        "# Вход в систему\n\n## Назначение\n\nПользователь должен войти.\n\n"
+        "## Ограничения\n\n- Одна сессия на пользователя.\n"
+    )
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+
+    assert data["checks"]["fix_iterations"] == 1
+    assert "Пользователь должен войти" in data["updated"]
+    assert "Юзер" not in data["updated"]
+    assert data["checks"]["summary"]["errors"] == 0
+
+    fix_prompt = last_prompt(client.ollama, "НАРУШЕНИЯ, НАЙДЕННЫЕ ПРОВЕРКОЙ")
+    assert "Вместо «юзер» пишем «пользователь»" in fix_prompt
+
+
+def test_generation_keeps_original_answer_if_fix_is_worse(client):
+    client.ollama.generate_response = BAD_DOC
+    client.ollama.fix_response = "## Ещё хуже\n\n* Юзер\n* Материал\n\nтекст  \n\n\nещё текст"
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+
+    assert data["updated"].strip() == BAD_DOC.strip()  # починку отклонили — она не лучше
+    assert data["checks"]["summary"]["errors"] > 0     # нарушения показаны, а не спрятаны
+
+
+def test_fix_loop_can_be_switched_off(client):
+    config_path = client.tmp_path / "config.yaml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("max_fix_iterations: 2", "max_fix_iterations: 0"),
+        encoding="utf-8",
+    )
+    client.ollama.generate_response = BAD_DOC
+    data = client.post(
+        "/api/generate", json={"doc_path": "api-auth.md", "change_description": "правка"}
+    ).json()
+    assert data["checks"]["fix_iterations"] == 0
+    assert data["checks"]["summary"]["errors"] > 0
+
+
+def test_section_scope_does_not_demand_whole_document_rules(client):
+    from backend.checks import run_checks
+
+    config = config_module.load_config()
+    section = "## Срок жизни токена\n\nТокен действует 120 минут.\n"
+    document_rules = {item.rule for item in run_checks(section, config, scope="document")}
+    section_rules = {item.rule for item in run_checks(section, config, scope="section")}
+    assert "missing-section" in document_rules
+    assert "first-heading-h1" in document_rules
+    assert "missing-section" not in section_rules
+    assert "first-heading-h1" not in section_rules
+
+
+def test_stream_also_runs_checks(client):
+    with client.stream(
+        "POST",
+        "/api/generate/stream",
+        json={"doc_path": "api-auth.md", "change_description": "правка"},
+    ) as response:
+        events = [json_module.loads(line) for line in response.iter_lines() if line.strip()]
+    assert any(event["type"] == "checking" for event in events)
+    assert "checks" in events[-1]

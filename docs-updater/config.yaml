@@ -49,3 +49,27 @@ generation:
   # Размер контекста модели; увеличьте, если документы длинные.
   # Для qwen3:4b на 18 ГБ 8192 — разумный компромисс, при необходимости можно 16384.
   num_ctx: 8192
+
+checks:
+  # Машинная проверка соответствия: формулировка + оформление + шаблон.
+  enabled: true
+  # Встроенные проверки работают всегда, без установки чего-либо.
+  builtin_prose: true
+  builtin_markdown: true
+  schema: true
+  # Правила формулировки и шаблон статьи (правит редактор)
+  prose_rules: "data/style-rules.yaml"
+  template_schema: "data/template.schema.yaml"
+  # Оформление
+  max_line_length: 120
+  bullet_marker: "-"
+  require_fence_language: true
+  # Внешние линтеры подключаются автоматически, если установлены в системе.
+  # macOS: brew install vale && npm i -g markdownlint-cli2
+  use_vale: true
+  vale_binary: "vale"
+  vale_config: ".vale.ini"
+  use_markdownlint: true
+  markdownlint_command: "markdownlint-cli2"
+  # Сколько раз просить модель починить найденные нарушения
+  max_fix_iterations: 2

@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Предложение длиннее 25 слов — разбейте его."
+level: warning
+scope: sentence
+max: 25
+token: '\b\w+\b'
