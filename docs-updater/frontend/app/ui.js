@@ -112,12 +112,13 @@ const Muted = ({ children, size }) => html`
    API без Storybook не восстановить), поэтому полоса своя — но цвета берём из палитры
    дизайн-системы, а не подбираем. Это пробел ДС: нужен рабочий ProgressBar. */
 const TAG_COLORS = ((H.LIGHT_THEME || {}).colors || {}).tags || {};
+const LINE_COLOR = (((H.LIGHT_THEME || {}).colors || {}).elements || {})['line-solid'] || '#C7C7C9';
 
 const MatchBar = ({ value, width }) => {
   const share = Math.max(0, Math.min(100, Math.round(value || 0)));
   const fill = share >= 85 ? (TAG_COLORS.emerald || '#1B8370')
     : share >= 65 ? (TAG_COLORS.marina || '#4269E7')
-    : (TAG_COLORS.neutral || '#515255');
+    : LINE_COLOR;  /* низкое совпадение не должно выглядеть тяжелее высокого */
   return html`
     <div role="img" aria-label=${`Совпадение ${share} процентов`}
       style=${{ width: (width || 160) + 'px', height: '6px', borderRadius: '3px',
