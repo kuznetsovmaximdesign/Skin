@@ -107,6 +107,25 @@ const Note = ({ children, tone }) => html`
 const Muted = ({ children, size }) => html`
   <span style=${{ fontSize: (size || 12) + 'px', color: C.textSec }}>${children}</span>`;
 
+
+/* Полоса совпадения. Компонент ProgressBar из HEXA не отрисовывается (его настоящий
+   API без Storybook не восстановить), поэтому полоса своя — но цвета берём из палитры
+   дизайн-системы, а не подбираем. Это пробел ДС: нужен рабочий ProgressBar. */
+const TAG_COLORS = ((H.LIGHT_THEME || {}).colors || {}).tags || {};
+
+const MatchBar = ({ value, width }) => {
+  const share = Math.max(0, Math.min(100, Math.round(value || 0)));
+  const fill = share >= 85 ? (TAG_COLORS.emerald || '#1B8370')
+    : share >= 65 ? (TAG_COLORS.marina || '#4269E7')
+    : (TAG_COLORS.neutral || '#515255');
+  return html`
+    <div role="img" aria-label=${`Совпадение ${share} процентов`}
+      style=${{ width: (width || 160) + 'px', height: '6px', borderRadius: '3px',
+                background: C.line, overflow: 'hidden' }}>
+      <div style=${{ width: share + '%', height: '100%', borderRadius: '3px', background: fill }}></div>
+    </div>`;
+};
+
 /* --- обязательные состояния ------------------------------------------------ */
 
 /* Ошибка отвечает на три вопроса: что случилось, почему и что делать.
@@ -195,7 +214,7 @@ const fileName = (path) => String(path || '').split('/').pop();
 
 window.UI = {
   H, html, C, TAG, STATUS, severityTone,
-  Card, CardHead, Body, Row, Stack, PageTitle, Note, Muted,
+  Card, CardHead, Body, Row, Stack, PageTitle, Note, Muted, MatchBar,
   Block, ErrorState, EmptyState, LoadingState, DisabledState,
   ELEVATION, PANEL_SHADOW, FOCUS_RING, SELECTED,
   useAsync, useElapsed, percent, plural, fileName, readValue, popupToBody,

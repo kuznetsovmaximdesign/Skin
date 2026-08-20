@@ -3,7 +3,7 @@
 (function () {
 
 const { H, html, C, TAG, STATUS, severityTone, Card, CardHead, Body, Row, Stack, PageTitle,
-        Note, Muted, Block, useAsync, useElapsed, readValue, percent, plural, fileName,
+        Note, Muted, MatchBar, Block, useAsync, useElapsed, readValue, percent, plural, fileName,
         useState, useEffect, useRef } = window.UI;
 
 /* --- шаг 1: что изменилось -------------------------------------------------- */
@@ -29,6 +29,7 @@ function CandidateCard({ item, onPick }) {
       <${Stack} gap=${8} style=${{ alignItems: 'flex-start' }}>
         <${Muted}>Совпадение<//>
         <div style=${{ fontSize: '20px', fontWeight: 600, lineHeight: 1 }}>${percent(item.relevance)}</div>
+        <${MatchBar} value=${item.relevance} width=${160} />
         <${H.Button} mode="secondary" size="small" text="Обновить документ"
           onClick=${() => onPick(item)} />
       <//>
