@@ -2218,3 +2218,24 @@ def test_import_reports_unreachable_page(client, portal):
     response = client.post("/api/import/preview", json={"url": f"{portal.url}/missing"})
     assert response.status_code == 400
     assert "Не удалось получить страницу" in response.json()["detail"]
+
+
+def test_readiness_check_runs_and_reports(tmp_path):
+    """Проверялка готовности запускается и печатает разделы, ничего не меняя."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "check.py"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    output = result.stdout
+    assert "Что нужно, чтобы сервис вообще запустился" in output
+    assert "Python" in output
+    # Проверялка только смотрит: подсказки к невыполненным пунктам должны быть командами.
+    if "✗" in output:
+        assert "ollama" in output.lower() or "install_ui" in output or "pip install" in output
