@@ -36,3 +36,29 @@ a:hover { text-decoration: underline; }
   font-weight: 600;
 }
 .nav-item--active:hover { background: #E9F0FF; }
+
+/* Индикатор работы: бегущая полоса. Сервис не знает, сколько осталось,
+   поэтому полоса не заполняется, а движется — это честнее выдуманных процентов. */
+.progress {
+  height: 4px;
+  border-radius: 2px;
+  background: #F2F3F4;
+  overflow: hidden;
+}
+.progress--on-accent { background: #C7D8FB; }
+.progress__bar {
+  width: 40%;
+  height: 100%;
+  border-radius: 2px;
+  background: #4269E7;
+  animation: progress-run 1.4s ease-in-out infinite;
+}
+@keyframes progress-run {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+/* Уважаем системную настройку «меньше движения». */
+@media (prefers-reduced-motion: reduce) {
+  .progress--on-accent { background: #C7D8FB; }
+.progress__bar { animation: none; width: 100%; opacity: 0.4; }
+}

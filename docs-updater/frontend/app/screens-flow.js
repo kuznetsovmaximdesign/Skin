@@ -3,7 +3,7 @@
 (function () {
 
 const { H, html, C, TAG, STATUS, severityTone, Card, CardHead, Body, Row, Stack, PageTitle,
-        Note, Muted, MatchBar, Block, useAsync, useElapsed, readValue, percent, plural, fileName,
+        Note, Muted, Progress, Block, useAsync, useElapsed, readValue, percent, plural, fileName,
         useState, useEffect, useRef } = window.UI;
 
 /* --- шаг 1: что изменилось -------------------------------------------------- */
@@ -29,7 +29,6 @@ function CandidateCard({ item, onPick }) {
       <${Stack} gap=${8} style=${{ alignItems: 'flex-start' }}>
         <${Muted}>Совпадение<//>
         <div style=${{ fontSize: '20px', fontWeight: 600, lineHeight: 1 }}>${percent(item.relevance)}</div>
-        <${MatchBar} value=${item.relevance} width=${160} />
         <${H.Button} mode="secondary" size="small" text="Обновить документ"
           onClick=${() => onPick(item)} />
       <//>
@@ -434,6 +433,7 @@ function ScreenUpdate({ app }) {
                                           border: '1px solid ' + C.accentBorder, borderRadius: '8px' }}>
                 <${H.Loader} size="small" />
                 <span style=${{ fontSize: '13px' }}>${stream.status}</span>
+                <div style=${{ flex: 1, minWidth: '160px', maxWidth: '320px' }}><${Progress} onAccent=${true} /></div>
                 <span style=${{ fontSize: '13px', fontWeight: 600, marginLeft: 'auto' }}>${elapsed}</span>
               <//>` : null}
             ${stream.done ? html`

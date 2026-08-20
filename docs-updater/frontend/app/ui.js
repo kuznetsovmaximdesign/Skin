@@ -108,24 +108,16 @@ const Muted = ({ children, size }) => html`
   <span style=${{ fontSize: (size || 12) + 'px', color: C.textSec }}>${children}</span>`;
 
 
-/* Полоса совпадения. Компонент ProgressBar из HEXA не отрисовывается (его настоящий
-   API без Storybook не восстановить), поэтому полоса своя — но цвета берём из палитры
-   дизайн-системы, а не подбираем. Это пробел ДС: нужен рабочий ProgressBar. */
-const TAG_COLORS = ((H.LIGHT_THEME || {}).colors || {}).tags || {};
-const LINE_COLOR = (((H.LIGHT_THEME || {}).colors || {}).elements || {})['line-solid'] || '#C7C7C9';
-
-const MatchBar = ({ value, width }) => {
-  const share = Math.max(0, Math.min(100, Math.round(value || 0)));
-  const fill = share >= 85 ? (TAG_COLORS.emerald || '#1B8370')
-    : share >= 65 ? (TAG_COLORS.marina || '#4269E7')
-    : LINE_COLOR;  /* низкое совпадение не должно выглядеть тяжелее высокого */
-  return html`
-    <div role="img" aria-label=${`Совпадение ${share} процентов`}
-      style=${{ width: (width || 160) + 'px', height: '6px', borderRadius: '3px',
-                background: C.line, overflow: 'hidden' }}>
-      <div style=${{ width: share + '%', height: '100%', borderRadius: '3px', background: fill }}></div>
-    </div>`;
-};
+/* Индикатор работы. Показывается только когда сервис действительно занят.
+   Сколько осталось, сервис не знает (модель отвечает, когда ответит), поэтому
+   полоса бегущая, а не заполняющаяся: она честно говорит «идёт», а не врёт про проценты.
+   Это пробел ДС: ProgressBar из HEXA не отрисовывается. */
+const Progress = ({ width, onAccent }) => html`
+  <div class=${'progress' + (onAccent ? ' progress--on-accent' : '')}
+    role="progressbar" aria-label="Идёт работа"
+    style=${{ width: width ? width + 'px' : '100%' }}>
+    <div class="progress__bar"></div>
+  </div>`;
 
 /* --- обязательные состояния ------------------------------------------------ */
 
@@ -146,9 +138,10 @@ const EmptyState = ({ title, description, action, image }) => html`
   <//>`;
 
 const LoadingState = ({ title, description }) => html`
-  <div style=${{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 0' }}>
+  <${Stack} gap=${12} style=${{ alignItems: 'center', padding: '24px 0' }}>
     <${H.Placeholder} image="preparing" size="small" title=${title || 'Считаем…'} description=${description || ''} />
-  </div>`;
+    <${Progress} width=${240} />
+  <//>`;
 
 const DisabledState = ({ title, children }) => html`
   <${H.SectionMessage} mode="info" title=${title}>${children}<//>`;
@@ -215,7 +208,7 @@ const fileName = (path) => String(path || '').split('/').pop();
 
 window.UI = {
   H, html, C, TAG, STATUS, severityTone,
-  Card, CardHead, Body, Row, Stack, PageTitle, Note, Muted, MatchBar,
+  Card, CardHead, Body, Row, Stack, PageTitle, Note, Muted, Progress,
   Block, ErrorState, EmptyState, LoadingState, DisabledState,
   ELEVATION, PANEL_SHADOW, FOCUS_RING, SELECTED,
   useAsync, useElapsed, percent, plural, fileName, readValue, popupToBody,
