@@ -1,0 +1,22 @@
+# Скопировать в config.toml, заполнить, поставить права 600.
+# Путь к файлу задаётся переменной LIFE_BOT_CONFIG, по умолчанию ./config.toml
+
+[telegram]
+token = "123456:ЗАМЕНИТЬ"
+# Бот личный. Сообщения от других tg_user_id игнорируются.
+owner_id = 0
+
+[paths]
+db = "var/life_bot.db"
+files = "var/files"
+log = "var/life_bot.log"
+
+[voice]
+# Расшифровка голоса локальным whisper. Выключено — голос сохраняется без транскрипта.
+enabled = true
+model = "small"
+device = "cpu"
+compute_type = "int8"
+
+[log]
+level = "INFO"
