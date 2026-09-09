@@ -106,14 +106,21 @@ def reminder_overdue(title: str, days: int, sent_count: int) -> str:
     return f"{title} — {ordinal(days)} день, {ordinal(sent_count, 'n')} напоминание."
 
 
-def overdue_list(items: list[tuple[str, int]]) -> str:
+OVERDUE_LIMIT = 10
+
+
+def overdue_list(items: list[tuple[str, int]], limit: int = OVERDUE_LIMIT) -> str:
     """Всё просроченное одним сообщением, а не по одному.
 
-    `Просрочено:` и дальше строки вида `ОСАГО — 3 дня.`
+    `Просрочено:` и дальше строки вида `ОСАГО — 3 дня.` Длинный список
+    обрезается: в сообщение Telegram помещается 4096 знаков, и упереться
+    в этот предел значит не отправить вообще ничего.
     """
     lines = ["Просрочено:"]
-    for title, days in items:
+    for title, days in items[:limit]:
         lines.append(f"{title} — сегодня." if days == 0 else f"{title} — {plural_days(days)}.")
+    if len(items) > limit:
+        lines.append(f"И ещё {len(items) - limit}.")
     return "\n".join(lines)
 
 

@@ -55,8 +55,10 @@ async def run(config: Config) -> None:
     db.bind_tg_user(config.owner_id)
     log.info("база %s, записей в inbox_raw: %s", config.db_path, db.count_raw())
 
-    heartbeat = Heartbeat(config.heartbeat.url, config.heartbeat.interval_seconds)
     bot = Bot(token=config.token, default=DefaultBotProperties())
+    heartbeat = Heartbeat(
+        config.heartbeat.url, config.heartbeat.interval_seconds, check=bot.get_me
+    )
     handlers, scheduler = build(config, bot, db)
 
     dispatcher = Dispatcher()

@@ -68,3 +68,32 @@ def test_config_heartbeat_defaults_to_off(tmp_path):
     config = Config.load(path)
     assert config.heartbeat.url == ""
     assert config.heartbeat.interval_seconds == 300
+
+
+async def test_no_beat_while_telegram_is_unreachable():
+    """Живой процесс без связи с Telegram — это молчащий бот, стучать нельзя."""
+    pings = []
+
+    async def broken_check():
+        raise RuntimeError("Telegram недоступен")
+
+    beat = Heartbeat("https://hc-ping.com/uuid", check=broken_check)
+    beat.ping = lambda suffix="": pings.append(suffix)
+    assert await beat.beat() is False
+    assert pings == []
+
+
+async def test_beat_goes_through_when_the_link_is_alive():
+    pings = []
+
+    async def alive_check():
+        return True
+
+    async def fake_ping(suffix=""):
+        pings.append(suffix)
+        return True
+
+    beat = Heartbeat("https://hc-ping.com/uuid", check=alive_check)
+    beat.ping = fake_ping
+    assert await beat.beat() is True
+    assert pings == [""]

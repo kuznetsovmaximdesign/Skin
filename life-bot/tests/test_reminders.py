@@ -176,3 +176,60 @@ async def test_todays_item_in_a_list_is_not_counted_in_days(db: Database):
 
     await reminders.send_overdue(NOW.replace(hour=19))
     assert bot.sent[0][1] == "Просрочено:\nОСАГО — 1 день.\nинтернет — сегодня."
+
+
+async def test_a_pile_missed_during_downtime_comes_as_one_list(db: Database):
+    """Бот стоял сутки — пропущенное уходит списком, а не пачкой сообщений."""
+    bot, deadlines, reminders = build(db)
+    for i in range(5):
+        deadlines.create(title=f"дело {i}", due_at=NOW - timedelta(days=2))
+
+    await reminders.send_due(NOW)
+    lists = [text for text in bot.texts if text.startswith("Просрочено:")]
+    assert len(lists) == 1
+    assert "дело 4" in lists[0]
+    assert not [text for text in bot.texts if text == "дело 0."]     # по одному не слали
+
+
+async def test_a_single_missed_item_still_comes_on_its_own(db: Database):
+    bot, deadlines, reminders = build(db)
+    deadlines.create(title="ОСАГО", due_at=NOW - timedelta(days=2))
+    await reminders.send_due(NOW)
+    assert bot.texts[0] == "ОСАГО."
+
+
+async def test_todays_due_items_are_not_swept_into_the_list(db: Database):
+    bot, deadlines, reminders = build(db)
+    for i in range(3):
+        deadlines.create(title=f"сегодня {i}", due_at=NOW - timedelta(minutes=1))
+    await reminders.send_due(NOW)
+    assert [text for text in bot.texts if text.startswith("Просрочено:")] == []
+    assert bot.texts.count("сегодня 0.") == 1
+
+
+async def test_a_failed_send_is_not_recorded_as_delivered(db: Database):
+    """Сбой сети не должен молча съесть список просроченного."""
+    bot, deadlines, reminders = build(db)
+    for i in range(2):
+        deadlines.mark_sent(deadlines.create(title=f"дело {i}", due_at=NOW - timedelta(days=2)))
+
+    async def broken_send(*args, **kwargs):
+        raise RuntimeError("сеть отвалилась")
+
+    bot.send_message = broken_send
+    assert await reminders.send_overdue(NOW) is False
+    assert reminders.setting("overdue_message_text") == ""      # ничего не запомнили
+
+    del bot.send_message                                        # связь вернулась
+    assert await reminders.send_overdue(NOW) is True
+
+
+async def test_a_long_list_is_trimmed_to_fit_a_message(db: Database):
+    bot, deadlines, reminders = build(db)
+    for i in range(14):
+        deadlines.mark_sent(deadlines.create(title=f"дело {i}", due_at=NOW - timedelta(days=2)))
+
+    await reminders.send_overdue(NOW)
+    text = bot.sent[0][1]
+    assert text.endswith("И ещё 4.")
+    assert len(text) < 4096

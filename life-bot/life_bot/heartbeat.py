@@ -1,8 +1,9 @@
 """Heartbeat на healthchecks.io.
 
-Упавший бот не может сообщить о себе сам — контроль только внешний. Пока
-процесс жив, он раз в N секунд стучится по адресу из конфига. Перестал
-стучаться — внешний сервис поднимает тревогу.
+Упавший бот не может сообщить о себе сам — контроль только внешний. Раз в N
+секунд бот стучится по адресу из конфига, но лишь убедившись, что Telegram
+отвечает: живой процесс без связи с Telegram — это молчащий бот, и стучать
+за него «всё хорошо» нельзя.
 """
 
 from __future__ import annotations
@@ -14,9 +15,10 @@ log = logging.getLogger(__name__)
 
 
 class Heartbeat:
-    def __init__(self, url: str | None, interval: int = 300) -> None:
+    def __init__(self, url: str | None, interval: int = 300, check=None) -> None:
         self.url = (url or "").strip()
         self.interval = max(30, int(interval))
+        self.check = check      # проверка живости связи с Telegram
         self._task: asyncio.Task | None = None
 
     @property
@@ -40,8 +42,24 @@ class Heartbeat:
 
     async def _loop(self) -> None:
         while True:
-            await self.ping()
+            await self.beat()
             await asyncio.sleep(self.interval)
+
+    async def beat(self) -> bool:
+        """Стук только при живой связи с Telegram.
+
+        Процесс может быть жив, а Telegram недоступен — тогда бот молчит,
+        и стучать «всё хорошо» нельзя: внешний контроль перестанет быть
+        контролем. Проверка не прошла — пропускаем такт, и healthchecks.io
+        сам поднимет тревогу.
+        """
+        if self.check is not None:
+            try:
+                await self.check()
+            except Exception as exc:
+                log.warning("связь с Telegram не подтверждена, стук пропущен: %s", exc)
+                return False
+        return await self.ping()
 
     def start(self) -> None:
         if not self.enabled:

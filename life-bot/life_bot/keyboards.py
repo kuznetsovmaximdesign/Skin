@@ -52,9 +52,13 @@ def overdue_single(record_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def overdue_list(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
-    """Список просроченного: по кнопке на позицию плюс две общие."""
-    rows = [[_button(f"{title} сделал", DONE, record_id)] for record_id, title in items[:8]]
+def overdue_list(items: list[tuple[int, str]], limit: int = 10) -> InlineKeyboardMarkup:
+    """Список просроченного: по кнопке на позицию плюс две общие.
+
+    Предел тот же, что и у текста списка: кнопка без строки и строка без
+    кнопки одинаково сбивают с толку.
+    """
+    rows = [[_button(f"{title} сделал", DONE, record_id)] for record_id, title in items[:limit]]
     rows.append(
         [
             InlineKeyboardButton(text="всё через час", callback_data=f"{ALL_HOUR}:0"),

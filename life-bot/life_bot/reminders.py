@@ -64,11 +64,25 @@ class Reminders:
     # -- напоминания ----------------------------------------------------
 
     async def send_due(self, now: datetime) -> list[int]:
-        """Наступившие сроки. Каждый — отдельным новым сообщением."""
+        """Наступившие сроки — каждый отдельным сообщением.
+
+        Кроме одного случая: если бот стоял и накопилось пропущенное, оно
+        уходит одним списком. Иначе после суток простоя в чат вываливается
+        десяток сообщений подряд, а чат не должен превращаться в ленту.
+        """
         if self.is_quiet(now):
             return []
+
+        pending = self.deadlines.not_yet_sent(now)
+        missed = [d for d in pending if d.days_overdue(now) >= 1]
+        if len(missed) > 1:
+            for deadline in missed:
+                self.deadlines.mark_sent(deadline.record_id)
+            await self.send_overdue(now)
+            pending = [d for d in pending if d.days_overdue(now) < 1]
+
         sent: list[int] = []
-        for deadline in self.deadlines.not_yet_sent(now):
+        for deadline in pending:
             try:
                 await self.bot.send_message(
                     chat_id=self.chat_id,
@@ -113,7 +127,10 @@ class Reminders:
         if text == self.setting(OVERDUE_TEXT_KEY) and self.setting(OVERDUE_KEY):
             return False                                   # ничего не изменилось
 
-        await self._send_or_edit(OVERDUE_KEY, text, markup)
+        if await self._send_or_edit(OVERDUE_KEY, text, markup) is None:
+            # Не ушло — не помечаем отправленным, иначе список молча пропадёт
+            # до следующего изменения состава просроченного.
+            return False
         self._remember(OVERDUE_TEXT_KEY, text)
         for deadline in overdue:
             self.deadlines.mark_sent(deadline.record_id)
