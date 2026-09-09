@@ -1,0 +1,34 @@
+# Юнит бота. Ставится в /etc/systemd/system/life-bot.service
+# Пути и пользователя поправить под свою машину.
+
+[Unit]
+Description=Личный бот
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lifebot
+Group=lifebot
+WorkingDirectory=/opt/life-bot
+Environment=LIFE_BOT_CONFIG=/opt/life-bot/config.toml
+ExecStart=/opt/life-bot/.venv/bin/python -m life_bot
+
+Restart=always
+RestartSec=5
+
+# Ограничения: боту не нужен доступ никуда, кроме своего каталога.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/life-bot/var
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

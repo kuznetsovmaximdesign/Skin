@@ -1,0 +1,12 @@
+# Ежедневный бэкап в 04:30 по местному времени.
+
+[Unit]
+Description=Ежедневный бэкап базы личного бота
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

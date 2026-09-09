@@ -12,6 +12,7 @@ from aiogram.types import Message
 
 from .config import Config, ConfigError
 from .db import Database
+from .heartbeat import Heartbeat
 from .intake import Intake
 from .logging_setup import setup as setup_logging
 from .voice import Transcriber
@@ -49,6 +50,8 @@ async def run(config: Config) -> None:
     )
     intake = Intake(db=db, files_dir=config.files_dir, transcriber=transcriber)
 
+    heartbeat = Heartbeat(config.heartbeat.url, config.heartbeat.interval_seconds)
+
     bot = Bot(token=config.token, default=DefaultBotProperties())
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router(intake, config.owner_id))
@@ -56,8 +59,10 @@ async def run(config: Config) -> None:
     try:
         me = await bot.get_me()
         log.info("бот @%s запущен", me.username)
+        heartbeat.start()
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
+        await heartbeat.stop()
         await bot.session.close()
         db.close()
         log.info("остановлен")

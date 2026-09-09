@@ -79,6 +79,7 @@ def test_example_file_matches_the_loader():
     from pathlib import Path
 
     data = tomllib.loads(Path("config.example.toml").read_text(encoding="utf-8"))
-    assert set(data) == {"telegram", "paths", "voice", "log"}
+    assert set(data) == {"telegram", "paths", "voice", "heartbeat", "log"}
     assert set(data["paths"]) == {"db", "files", "log"}
     assert set(data["voice"]) == {"enabled", "model", "device", "compute_type"}
+    assert set(data["heartbeat"]) == {"url", "interval_seconds"}

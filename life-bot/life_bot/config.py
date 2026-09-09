@@ -27,6 +27,12 @@ class VoiceConfig:
 
 
 @dataclass(frozen=True)
+class HeartbeatConfig:
+    url: str = ""
+    interval_seconds: int = 300
+
+
+@dataclass(frozen=True)
 class Config:
     token: str
     owner_id: int
@@ -35,6 +41,7 @@ class Config:
     log_path: Path
     log_level: str
     voice: VoiceConfig
+    heartbeat: HeartbeatConfig
 
     @classmethod
     def load(cls, path: str | os.PathLike[str] | None = None) -> "Config":
@@ -59,6 +66,7 @@ class Config:
         paths = data.get("paths", {})
         base = cfg_path.parent.resolve()
         voice = data.get("voice", {})
+        heartbeat = data.get("heartbeat", {})
         log_section = data.get("log", {})
 
         return cls(
@@ -73,6 +81,10 @@ class Config:
                 model=str(voice.get("model", "small")),
                 device=str(voice.get("device", "cpu")),
                 compute_type=str(voice.get("compute_type", "int8")),
+            ),
+            heartbeat=HeartbeatConfig(
+                url=str(heartbeat.get("url", "")).strip(),
+                interval_seconds=int(heartbeat.get("interval_seconds", 300)),
             ),
         )
 

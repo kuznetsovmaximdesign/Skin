@@ -20,3 +20,9 @@ compute_type = "int8"
 
 [log]
 level = "INFO"
+
+[heartbeat]
+# Адрес проверки с healthchecks.io. Пусто — heartbeat выключен.
+# Упавший бот сам о себе не сообщит, поэтому контроль только внешний.
+url = ""
+interval_seconds = 300
