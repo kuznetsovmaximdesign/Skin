@@ -1,1 +1,5 @@
 aiogram==3.13.1
+dateparser==1.2.0
+python-dateutil==2.9.0.post0
+APScheduler==3.10.4
+SQLAlchemy==2.0.35

@@ -1,4 +1,4 @@
-"""Каркас бота. Этап 1: приём текста, голоса и фото в inbox_raw."""
+"""Каркас бота: приём входящих, сроки, напоминания."""
 
 from __future__ import annotations
 
@@ -6,34 +6,47 @@ import asyncio
 import logging
 import sys
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import Message
 
 from .config import Config, ConfigError
 from .db import Database
+from .deadlines import Deadlines
 from .heartbeat import Heartbeat
 from .intake import Intake
 from .logging_setup import setup as setup_logging
+from .questions import Questions
+from .reminders import Reminders
+from .router import Handlers, build_router
+from .scheduler import Scheduler
 from .voice import Transcriber
 
 log = logging.getLogger(__name__)
 
 
-def build_router(intake: Intake, owner_id: int) -> Router:
-    router = Router(name="intake")
-    router.message.filter(F.from_user.id == owner_id)
-
-    @router.message()
-    async def on_message(message: Message, bot: Bot) -> None:
-        try:
-            await intake.accept(message, bot)
-        except Exception:
-            # Сюда попадать не должны: accept пишет в базу до всех рискованных
-            # операций. Но если попали — в лог, пользователю ничего.
-            log.exception("сообщение %s не принято", message.message_id)
-
-    return router
+def build(config: Config, bot: Bot, db: Database) -> tuple[Handlers, Scheduler]:
+    """Собирает части воедино. Вынесено из run, чтобы проверялось без polling."""
+    tz = str((db.get_profile(1) or {})["tz"] or "Europe/Moscow")
+    deadlines = Deadlines(db, tz=tz)
+    questions = Questions(db, tz=tz)
+    reminders = Reminders(
+        bot=bot, db=db, deadlines=deadlines, chat_id=config.owner_id, tz=tz
+    )
+    transcriber = Transcriber(
+        enabled=config.voice.enabled,
+        model=config.voice.model,
+        device=config.voice.device,
+        compute_type=config.voice.compute_type,
+    )
+    handlers = Handlers(
+        db=db,
+        intake=Intake(db=db, files_dir=config.files_dir, transcriber=transcriber),
+        deadlines=deadlines,
+        questions=questions,
+        reminders=reminders,
+        tz=tz,
+    )
+    return handlers, Scheduler(reminders, config.db_path, tz=tz)
 
 
 async def run(config: Config) -> None:
@@ -42,26 +55,22 @@ async def run(config: Config) -> None:
     db.bind_tg_user(config.owner_id)
     log.info("база %s, записей в inbox_raw: %s", config.db_path, db.count_raw())
 
-    transcriber = Transcriber(
-        enabled=config.voice.enabled,
-        model=config.voice.model,
-        device=config.voice.device,
-        compute_type=config.voice.compute_type,
-    )
-    intake = Intake(db=db, files_dir=config.files_dir, transcriber=transcriber)
-
     heartbeat = Heartbeat(config.heartbeat.url, config.heartbeat.interval_seconds)
-
     bot = Bot(token=config.token, default=DefaultBotProperties())
+    handlers, scheduler = build(config, bot, db)
+
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router(intake, config.owner_id))
+    dispatcher.include_router(build_router(handlers, config.owner_id))
 
     try:
         me = await bot.get_me()
         log.info("бот @%s запущен", me.username)
+        scheduler.start()
         heartbeat.start()
+        await handlers.reminders.update_counter(handlers.now())
         await dispatcher.start_polling(bot, handle_signals=True)
     finally:
+        scheduler.shutdown()
         await heartbeat.stop()
         await bot.session.close()
         db.close()

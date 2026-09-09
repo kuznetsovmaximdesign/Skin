@@ -122,6 +122,17 @@ class Database:
         with self._lock:
             self.conn.execute("UPDATE inbox_raw SET error = ? WHERE id = ?", (error[:2000], raw_id))
 
+    def set_parsed(
+        self, raw_id: int, *, parser: str, parse_json: str | None = None, confidence: float | None = None
+    ) -> None:
+        """Разбор удался: запись больше не висит в инбоксе."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE inbox_raw SET parse_state = 'parsed', parser = ?, parse_json = ?, "
+                "confidence = ? WHERE id = ?",
+                (parser, parse_json, confidence, raw_id),
+            )
+
     def count_raw(self) -> int:
         with self._lock:
             row = self.conn.execute("SELECT COUNT(*) AS n FROM inbox_raw").fetchone()
