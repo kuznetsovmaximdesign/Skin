@@ -19,7 +19,7 @@
 
 ## 2. Среда
 
-- VPS play2go (31.77.131.216), Ubuntu, доступ по SSH.
+- Прод: хост не зафиксирован. Кандидат — домашний mini PC, VPS как приёмник бэкапов. Доступ по SSH.
 - Python 3.11+, systemd-сервис с `Restart=always`.
 - SQLite в WAL-режиме. Одна база, путь в конфиге.
 - Claude Code CLI на том же сервере, работает от подписки владельца. Вызов только в headless-режиме: `claude -p --output-format json`.
