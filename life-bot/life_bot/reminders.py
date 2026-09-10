@@ -18,6 +18,7 @@ from .quiet import in_quiet, shift_out_of_quiet
 log = logging.getLogger(__name__)
 
 COUNTER_KEY = "counter_message_id"
+COUNTER_TEXT_KEY = "counter_message_text"
 OVERDUE_KEY = "overdue_message_id"
 OVERDUE_TEXT_KEY = "overdue_message_text"
 
@@ -172,18 +173,28 @@ class Reminders:
         text = texts.counter(overdue, today, self.inbox_count())
 
         message_id = self.setting(COUNTER_KEY)
+        if message_id and text == self.setting(COUNTER_TEXT_KEY):
+            # Ничего не изменилось. Telegram на такую правку отвечает ошибкой,
+            # и попытка её обойти рождает в чате столбик одинаковых счётчиков.
+            return text
+
         if message_id:
             try:
                 await self.bot.edit_message_text(
                     chat_id=self.chat_id, message_id=int(message_id), text=text
                 )
+                self._remember(COUNTER_TEXT_KEY, text)
                 return text
-            except Exception:
+            except Exception as exc:
+                if "not modified" in str(exc):
+                    self._remember(COUNTER_TEXT_KEY, text)
+                    return text
                 log.info("счётчик %s не переписался, создаю новый", message_id)
 
         try:
             message = await self.bot.send_message(chat_id=self.chat_id, text=text)
             self._remember(COUNTER_KEY, str(message.message_id))
+            self._remember(COUNTER_TEXT_KEY, text)
             await self.bot.pin_chat_message(
                 chat_id=self.chat_id, message_id=message.message_id, disable_notification=True
             )

@@ -32,7 +32,9 @@ DEFAULT_HOUR = 9  # дата без времени: напоминаем в 09:0
 WEEKDAY_QUALIFIERS = ("эт", "ближайш", "следующ", "будущ", "текущ")
 
 _COMMAND_WORDS = re.compile(
-    r"^\s*(напомни(ть)?|напомнить|не\s+забыть|надо|нужно|запиши|поставь)\b\s*", re.I
+    r"\b(напомни\w*|не\s+забыть|надо|нужно|обязательно|запиши|поставь|сделать|"
+    r"мне|я|у\s+меня)\b",
+    re.I,
 )
 _LEADING_JUNK = re.compile(r"^\s*(?:(?:про|о|об|обо|что|чтобы|это)\b\s+|[,.—:-]+\s*)", re.I)
 
@@ -157,6 +159,16 @@ def extract_lead(text: str) -> tuple[timedelta | None, str]:
 
 
 _TIME_HHMM = re.compile(r"\b(?:в|к)\s*([01]?\d|2[0-3])[:\-]([0-5]\d)\b|\b([01]?\d|2[0-3]):([0-5]\d)\b", re.I)
+# «в 19 ч», «в 19 часов», «к 19». Дальше не должно идти слово, превращающее
+# число в дату: «в 20 числа» и «в 15 октября» — это не время.
+_TIME_HOUR_ONLY = re.compile(
+    r"\b(?:в|к|ко)\s+([01]?\d|2[0-3])"
+    r"(?![:.\d])"
+    r"(?!\s*(?:числ|январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|"
+    r"ноябр|декабр|-го))"
+    r"\s*(?:часам|часах|часов|часа|час|ч)?\b",
+    re.I,
+)
 _TIME_PART_OF_DAY = re.compile(r"\b(?:в|к)?\s*([01]?\d|2[0-3])\s+(утра|дня|вечера|ночи)\b", re.I)
 
 
@@ -177,6 +189,10 @@ def extract_time(text: str) -> tuple[tuple[int, int] | None, str]:
     if match:
         hour, minute = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
         return (int(hour), int(minute)), _cut(text, match.span())
+
+    match = _TIME_HOUR_ONLY.search(text)
+    if match:
+        return (int(match.group(1)), 0), _cut(text, match.span())
     return None, text
 
 
@@ -247,14 +263,19 @@ def _cut(text: str, span: tuple[int, int]) -> str:
 
 
 def clean_title(text: str) -> str:
-    """Остаток фразы после вырезания даты — это и есть название."""
-    result = _COMMAND_WORDS.sub("", text.strip())
+    """Остаток фразы после вырезания даты — это и есть название.
+
+    Служебные слова выбрасываются целиком: «В понедельник нужно напомнить»
+    названием не является. Не осталось ничего — возвращается пустая строка,
+    и спросить, о чём напомнить, лучше, чем выдумать.
+    """
+    result = _COMMAND_WORDS.sub(" ", text.strip())
     previous = None
     while previous != result:
         previous = result
         result = _LEADING_JUNK.sub("", result).strip()
     result = re.sub(r"\s{2,}", " ", result).strip(" ,.—-:")
-    return result
+    return "" if len(result) < 2 else result
 
 
 def _interval_of(rule: str) -> timedelta | None:

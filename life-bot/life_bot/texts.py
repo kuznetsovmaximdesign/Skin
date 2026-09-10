@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .dates import format_date, format_date_full, plural_days
 
@@ -18,9 +18,18 @@ _ORDINAL_MASC = (
     "четырнадцатый", "пятнадцатый", "шестнадцатый", "семнадцатый", "восемнадцатый",
     "девятнадцатый", "двадцатый",
 )
-_ORDINAL_NEUT = tuple(
-    word[:-2] + ("ое" if word.endswith("ый") else "ье") if word else "" for word in _ORDINAL_MASC
-)
+def _to_neuter(word: str) -> str:
+    """«первый» -> «первое», «второй» -> «второе», «третий» -> «третье»."""
+    if not word:
+        return ""
+    if word.endswith("ий"):
+        return word[:-2] + "ье"
+    if word.endswith(("ый", "ой")):
+        return word[:-2] + "ое"
+    return word
+
+
+_ORDINAL_NEUT = tuple(_to_neuter(word) for word in _ORDINAL_MASC)
 _REPEAT_WORDS = {
     "yearly": "каждый год",
     "monthly": "каждый месяц",
@@ -125,13 +134,15 @@ def overdue_list(items: list[tuple[str, int]], limit: int = OVERDUE_LIMIT) -> st
 
 
 def snoozed(title: str, until: datetime, today: date) -> str:
-    """`ОСАГО. Отложено на завтра, 10 сентября (чт).`"""
-    word = format_date(until, today=today)
-    if word in ("сегодня", "завтра"):
-        return f"{title}. Отложено на {word}, {format_date_full(until, today=today)}."
+    """`ОСАГО. Отложено на завтра, 10 сентября (чт).`
+
+    Внутри сегодняшнего дня дата бесполезна — нужно время: «Отложено на 16:00».
+    """
     if until.date() == today:
         return f"{title}. Отложено на {until:%H:%M}."
-    return f"{title}. Отложено на {word}."
+    if until.date() == today + timedelta(days=1):
+        return f"{title}. Отложено на завтра, {format_date_full(until, today=today)}."
+    return f"{title}. Отложено на {format_date_full(until, today=today)}."
 
 
 def moved_to(until: datetime, today: date) -> str:
@@ -151,6 +162,7 @@ def stopped(title: str) -> str:
 
 
 WHEN_DONE = "Когда сделал?"
+WHAT_ABOUT = "О чём напомнить?"
 
 
 # ---------------------------------------------------------------- команды

@@ -90,9 +90,33 @@ async def test_a_phrase_without_a_date_stays_in_the_inbox(flow):
     message = FakeMessage("телефон подрядчика по кровле, Сергей")
     await handlers.on_message(message, bot)
 
-    assert message.replies == []                    # молча, без выдумок
+    assert message.replies[0][0] == "Не понял, отложил."   # молчать нельзя: непонятно, принято ли
     assert db.get_raw(1)["parse_state"] == "new"
     assert deadlines.due(NOW + timedelta(days=365)) == []
+
+
+async def test_a_date_without_a_subject_is_a_question_not_a_guess(flow):
+    handlers, bot, deadlines, db = flow
+    first = FakeMessage("15 октября нужно напомнить в 19 ч")
+    await handlers.on_message(first, bot)
+
+    assert first.replies[0][0] == "О чём напомнить?"
+    assert deadlines.due(NOW + timedelta(days=365)) == []
+
+    second = FakeMessage("про стрижку", message_id=2)
+    await handlers.on_message(second, bot)
+
+    assert second.replies[0][0] == "Напомню 15 октября (чт) — про стрижку."
+    deadline = deadlines.due(datetime(2026, 10, 16, 9, 0))[0]
+    assert deadline.due_at == datetime(2026, 10, 15, 19, 0)
+    assert db.execute("SELECT state FROM pending_questions")[0]["state"] == "answered"
+
+
+async def test_the_answer_does_not_create_a_second_record(flow):
+    handlers, bot, deadlines, db = flow
+    await handlers.on_message(FakeMessage("15 октября напомнить в 19 ч"), bot)
+    await handlers.on_message(FakeMessage("про стрижку", message_id=2), bot)
+    assert len(db.execute("SELECT id FROM records")) == 1
 
 
 async def test_repeating_phrase_is_confirmed_as_repeating(flow):

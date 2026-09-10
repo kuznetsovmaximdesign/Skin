@@ -16,7 +16,6 @@ from .db import Database, utc_now_iso
 
 log = logging.getLogger(__name__)
 
-REACTION_RECEIVED = "👀"
 DEDUP_WINDOW = timedelta(minutes=1)
 
 
@@ -163,7 +162,6 @@ class Intake:
         if plan.needs_transcript and file_path is not None:
             await self._transcribe(raw_id, file_path)
 
-        await self._react(bot, message)
         return raw_id
 
     async def _download(self, bot: Any, plan: IntakePlan, raw_id: int) -> Path | None:
@@ -191,16 +189,3 @@ class Intake:
         if text:
             await asyncio.to_thread(self.db.set_transcript, raw_id, text)
             log.info("inbox_raw %s расшифрован, %s символов", raw_id, len(text))
-
-    async def _react(self, bot: Any, message: Any) -> None:
-        """Реакция — единственный ответ на этом этапе. Её отказ ничего не ломает."""
-        try:
-            from aiogram.types import ReactionTypeEmoji
-
-            await bot.set_message_reaction(
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji=REACTION_RECEIVED)],
-            )
-        except Exception:
-            log.warning("реакция не поставлена на сообщение %s", getattr(message, "message_id", None))

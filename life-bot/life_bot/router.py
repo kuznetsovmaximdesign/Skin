@@ -65,18 +65,29 @@ class Handlers:
         now = self.now()
         self.questions.expire(now)
         text = self.text_of(raw_id)
+
+        # Слой 1: висит вопрос — сообщение считается ответом на него.
+        if text and await self._answer_pending(message, raw_id, text, now):
+            return
+
         if not text:
+            await message.reply(texts.SAVED_AS_IS)
             await self.reminders.update_counter(now)
             return
 
         when = parse_when(text, now)
         if when is None:
             # Дат нет — своего слоя эта фраза ещё не дождалась, лежит в инбоксе.
+            await message.reply(texts.NOT_UNDERSTOOD)
             await self.reminders.update_counter(now)
             return
 
         if when.ambiguous and when.alternatives:
             await self._ask_which_day(message, raw_id, when, now)
+            return
+
+        if not when.title:
+            await self._ask_what_about(message, raw_id, when, now)
             return
 
         record_id = self.deadlines.create_from_when(when, raw_id=raw_id)
@@ -101,6 +112,71 @@ class Handlers:
         )
         await self.reminders.update_counter(now)
 
+    def _remember_pending(self, raw_id: int, when, title: str | None = None) -> None:
+        """Кладёт разобранный срок рядом с сырым сообщением до ответа на вопрос."""
+        self.db.execute(
+            "UPDATE inbox_raw SET parse_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "pending": title if title is not None else when.title,
+                        "hour": when.due_at.hour,
+                        "minute": when.due_at.minute,
+                        "due_at": when.due_at.isoformat(),
+                        "remind_at": when.remind_at.isoformat(),
+                        "repeat_rule": when.repeat_rule,
+                        "repeat_base": when.repeat_base,
+                    },
+                    ensure_ascii=False,
+                ),
+                raw_id,
+            ),
+        )
+
+    async def _ask_what_about(self, message: Message, raw_id: int, when, now: datetime) -> None:
+        """Дата есть, а названия нет. Спросить дешевле, чем выдумать."""
+        self._remember_pending(raw_id, when, title="")
+        self.questions.ask(
+            raw_id=raw_id, field="title", question=texts.WHAT_ABOUT, options=[], now=now
+        )
+        await message.reply(texts.WHAT_ABOUT)
+
+    async def _answer_pending(self, message: Message, raw_id: int, text: str, now: datetime) -> bool:
+        """Ответ на висящий вопрос применяется к одному полю, новой записи не рождает."""
+        row = self.questions.open()
+        if row is None or row["field"] != "title":
+            return False
+
+        source = self.db.get_raw(int(row["raw_id"]))
+        payload = json.loads(source["parse_json"] or "{}") if source else {}
+        if not payload.get("due_at"):
+            return False
+
+        record_id = self.deadlines.create(
+            title=text.strip(),
+            due_at=datetime.fromisoformat(payload["due_at"]),
+            remind_at=datetime.fromisoformat(payload["remind_at"]),
+            raw_id=int(row["raw_id"]),
+            repeat_rule=payload.get("repeat_rule"),
+            repeat_base=payload.get("repeat_base") or "calendar",
+        )
+        self.questions.close(int(row["id"]), answer_raw_id=raw_id)
+        self.db.set_parsed(int(row["raw_id"]), parser="rules", confidence=1.0)
+        self.db.set_parsed(raw_id, parser="rules", confidence=1.0)
+
+        deadline = self.deadlines.get(record_id)
+        await message.reply(
+            texts.confirm_deadline(
+                title=deadline.title,
+                due_at=deadline.due_at,
+                remind_at=deadline.remind_at,
+                today=now.date(),
+                repeat_rule=deadline.repeat_rule,
+            )
+        )
+        await self.reminders.update_counter(now)
+        return True
+
     async def _ask_which_day(self, message: Message, raw_id: int, when, now: datetime) -> None:
         """Пятница неоднозначна — спрашиваем, а не угадываем."""
         from .dates import format_date_full
@@ -111,10 +187,7 @@ class Handlers:
             raw_id=raw_id, field="due_at", question=question, options=options, now=now
         )
         labels = [format_date_full(day, today=now.date()) for day in when.alternatives]
-        self.db.execute(
-            "UPDATE inbox_raw SET parse_json = ? WHERE id = ?",
-            (json.dumps({"pending": when.title, "hour": when.due_at.hour}, ensure_ascii=False), raw_id),
-        )
+        self._remember_pending(raw_id, when)
         await message.reply(question, reply_markup=keyboards.weekday_choice(question_id, labels))
 
     # -- кнопки ---------------------------------------------------------

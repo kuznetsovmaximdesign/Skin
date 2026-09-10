@@ -123,14 +123,14 @@ class FakeTranscriber:
         return self.text
 
 
-async def test_text_message_saved_and_reacted(db: Database, tmp_path):
+async def test_text_message_is_saved(db: Database, tmp_path):
     bot = FakeBot()
     intake = Intake(db, tmp_path / "files")
     raw_id = await intake.accept(msg(message_id=5, text="привет"), bot)
 
     row = db.get_raw(raw_id)
     assert (row["kind"], row["text"], row["parse_state"]) == ("text", "привет", "new")
-    assert bot.reactions == [(100, 5, "👀")]
+    assert bot.reactions == []          # реакции убраны, обратная связь текстом
 
 
 async def test_voice_saved_downloaded_transcribed(db: Database, tmp_path):
@@ -165,7 +165,6 @@ async def test_download_failure_keeps_the_message(db: Database, tmp_path):
     assert row["text"] == "про подрядчика"
     assert row["file_path"] is None
     assert "download" in row["error"]
-    assert bot.reactions                        # реакция всё равно поставлена
 
 
 async def test_transcription_failure_keeps_the_file(db: Database, tmp_path):
@@ -198,14 +197,3 @@ async def test_repeat_of_the_same_message_is_ignored(db: Database, tmp_path):
     assert first is not None
     assert second is None
     assert db.count_raw() == 1
-
-
-async def test_broken_reaction_does_not_lose_the_message(db: Database, tmp_path):
-    class NoReactionBot(FakeBot):
-        async def set_message_reaction(self, **kwargs):
-            raise RuntimeError("нельзя ставить реакцию")
-
-    bot = NoReactionBot()
-    intake = Intake(db, tmp_path / "files")
-    raw_id = await intake.accept(msg(message_id=12, text="важное"), bot)
-    assert db.get_raw(raw_id)["text"] == "важное"

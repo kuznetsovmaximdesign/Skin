@@ -73,7 +73,19 @@ def test_snooze_until_tomorrow():
 
 
 def test_snooze_within_the_same_day_names_the_time():
-    assert texts.snoozed("ОСАГО", datetime(2026, 9, 9, 16, 0), TODAY) == "ОСАГО. Отложено на сегодня, 9 сентября (ср)."
+    """Внутри дня дата бесполезна, нужно время."""
+    assert texts.snoozed("ОСАГО", datetime(2026, 9, 9, 16, 0), TODAY) == "ОСАГО. Отложено на 16:00."
+
+
+def test_snooze_further_out_names_the_date():
+    assert texts.snoozed("ОСАГО", datetime(2026, 9, 16, 9, 0), TODAY) == "ОСАГО. Отложено на 16 сентября (ср)."
+
+
+def test_ordinals_in_neuter():
+    """«второе напоминание», а не «вторье»."""
+    assert [texts.ordinal(n, "n") for n in (1, 2, 3, 4, 6, 7, 8)] == [
+        "первое", "второе", "третье", "четвёртое", "шестое", "седьмое", "восьмое"
+    ]
 
 
 def test_moved_confirmation_repeats_the_weekday():
