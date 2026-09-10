@@ -1,0 +1,13 @@
+# Разовый запуск бэкапа. Запускается таймером, не вручную.
+
+[Unit]
+Description=Бэкап базы личного бота
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lifebot
+Group=lifebot
+WorkingDirectory=/opt/life-bot
+EnvironmentFile=/opt/life-bot/deploy/backup.env
+ExecStart=/opt/life-bot/deploy/backup.sh
